@@ -46,6 +46,8 @@ class SplitFlapModule
     void moveToIndex(int index);
     void moveToStep(int steps);
     void home();
+    uint16_t getCurrentStepPos() const { return stepper.currentStepPos; }
+    int getHomeOffset() const { return stepper.homeOffset; }
 
 private:
   static constexpr int ADDR_INIT        = 0;

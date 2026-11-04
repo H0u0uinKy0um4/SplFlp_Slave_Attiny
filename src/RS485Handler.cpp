@@ -72,7 +72,11 @@ void runCommand(char cmd, const char* arg,bool isBroadcast=false) {
     case 'c': attiny.Calibrate();  break;
     case 'd': attiny.getConfig(message); break;
     case 'l': attiny.getDrum(message); break;
-    case 'o': attiny.setHomeOffset(processNumber(arg)); break;
+    case 'o': {
+      long v = processNumber(arg);
+      if (v >= 0) attiny.setHomeOffset((int)v);
+      break;
+    }
     case 't': attiny.setStepsPerRev(processNumber(arg)); break;
     case 'g': attiny.moveToStep(processNumber(arg)); break;
     case 'i': attiny.setModuleId(processNumber(arg)); break;
@@ -80,6 +84,28 @@ void runCommand(char cmd, const char* arg,bool isBroadcast=false) {
     case 'e': attiny.deleteMapPosition(processNumber(arg)); break;
     case 'w': writeMapPosition(arg); break;
     case 'f': writeFlapChar(arg); break; 
+    case 'r': {
+      // Record current position as map entry; index 0 also sets home offset (compat)
+      if (isDigit(*arg)) {
+        long idx = atol(arg);
+        if (idx >= 0 && idx < 64) {
+          int cur = attiny.getCurrentStepPos();
+          attiny.setMapPosition((int)idx, cur);
+          if (idx == 0) {
+            attiny.setHomeOffset(cur);
+          }
+          message = "m" + String(attiny.getId()) + "r:" + String(idx) + ":" + String(cur);
+        } else {
+          message = "m" + String(attiny.getId()) + "r:" + String(idx) + ":-1";
+        }
+      }
+      break;
+    }
+    case 's': {
+      // State query: pos:busy:position_known
+      message = "m" + String(attiny.getId()) + "s:" + String(attiny.getCurrentStepPos()) + ":0:1";
+      break;
+    }
     
     default: break; 
   }
