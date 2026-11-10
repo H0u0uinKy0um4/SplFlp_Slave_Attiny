@@ -213,3 +213,11 @@ fuses *before* the erase: OSCCFG = 0x02 (20 MHz), SYSCFG0 = 0xC5 (factory
 preserved), BOOTEND = 0x08. Module id and calibration EEPROM are retained.
 Later application updates never use UPDI again; they go over RS485 as
 above.
+
+`bootloader/tools/flash_mqtt.py` drives those later updates from the bench:
+it validates the `ATtiny1616_OTA` build's `firmware.hex` (reusing
+install.py's parser, so a 0x0000-linked plain build is refused), then
+publishes `begin`/`chunk`/`flash` on the master's
+`<prefix>/command/firmware` topic — chunks of 768 image bytes
+(padding-free base64 per chunk), plus `--cancel` and `--reset` for the
+recovery paths above and `--watch` to follow the `ota` status object.
