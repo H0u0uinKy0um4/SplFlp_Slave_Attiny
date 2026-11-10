@@ -48,6 +48,8 @@ class SplitFlapModule
     uint16_t getCurrentStepPos() const { return stepper.currentStepPos; }
     int getHomeOffset() const { return stepper.homeOffset; }
     bool isPositionKnown() const { return stepper.positionKnown; }
+    // OTA: arm the boot flag so the next reset enters the bootloader.
+    bool requestBootloader();
 
 private:
   static constexpr int ADDR_INIT        = 0;

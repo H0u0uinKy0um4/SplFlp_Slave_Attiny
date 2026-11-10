@@ -46,6 +46,16 @@ void sendRS485(String & message) {
 }
 
 
+// Software reset into the bootloader.  The boot flag (EEPROM 255) is armed
+// by requestBootloader() before this is called, so the bootloader stays in
+// update mode after the reset.
+static void softwareReset() {
+  noInterrupts();
+  _PROTECTED_WRITE(RSTCTRL_SWRR, RSTCTRL_SWRE_bm);
+  for (;;) {}                      // reset takes effect within a few cycles
+}
+
+
 static void writeMapPosition(const char* arg) {
     const char* colon = strchr(arg, ':');
     if (colon) {
@@ -65,6 +75,7 @@ static void writeFlapChar(const char* arg) {
 
 void runCommand(char cmd, const char* arg,bool isBroadcast=false) {
   String message;
+  bool enterBootloader = false;
   switch (cmd) {   
     case '-': if(*arg) attiny.moveToFlap(*arg); break;
     case '+': if (isDigit(*arg)) attiny.moveToIndex(atoi(arg)); break;
@@ -109,12 +120,28 @@ void runCommand(char cmd, const char* arg,bool isBroadcast=false) {
                 ":0:" + String(attiny.isPositionKnown() ? 1 : 0);
       break;
     }
+    case 'b': {
+      // Enter the bootloader for an OTA update.  Unicast only: a broadcast
+      // would drop every module into update mode and stall the display.
+      if (!isBroadcast) {
+        bool ok = attiny.requestBootloader();
+        message = "m" + String(attiny.getId()) + "b:" + (ok ? "1" : "0");
+        if (ok) enterBootloader = true;
+      }
+      break;
+    }
     
     default: break; 
   }
     if (message.length() && !isBroadcast) {
     sendRS485(message);
   }
+    if (enterBootloader) {
+      // sendRS485() blocks until the reply is fully shifted out; give the
+      // master a moment to parse it before the bus goes quiet for the reset.
+      delay(100);
+      softwareReset();
+    }
 }
 
 

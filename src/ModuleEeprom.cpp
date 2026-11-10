@@ -1,6 +1,16 @@
 #include <EEPROM.h>
 #include "ModuleHandler.h"
+#include "OTAProtocol.h"
 #include <stdint.h>
+
+// Set the boot flag the bootloader checks (EEPROM 255, alone in its 32-byte
+// EEPROM page, above the app's last used byte at 204).  The next reset stays
+// in update mode; only a verified FINISH or an explicit RESET clears it.
+bool SplitFlapModule::requestBootloader()
+{
+    EEPROM.update(OTA_EEPROM_BOOT_FLAG_ADDR, OTA_BOOT_FLAG_VALUE);
+    return (EEPROM.read(OTA_EEPROM_BOOT_FLAG_ADDR) == OTA_BOOT_FLAG_VALUE);
+}
 
 bool SplitFlapModule::getAutoHome()const
 {
