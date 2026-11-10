@@ -165,6 +165,16 @@ The app also overrides that hook (`src/ResetFlags.cpp`) with the same
 bookkeeping minus the forced reset, so a hand-over that does clear the flags
 cannot produce this loop.
 
+The hand-over `jmp` must name **`0x0800`, not `0x0400`**. GNU as takes `jmp`
+operands as *byte* addresses and encodes the word address itself, so writing
+the word address in the source (`APP_START_BYTE / 2`) produces `jmp 0x0400`
+and lands 1 KB low, in the middle of the bootloader. The app then never runs
+while the bootloader's own setup is re-entered with garbage registers, which
+can even scribble on EEPROM. The symptom is a marker trace that stops after
+the "jumped" marker with every fuse and EEPROM field looking healthy. Use
+`jmp APP_START_BYTE` (`0x0800`, encoded as word `0x0400`) and check the
+disassembly: the instruction bytes must be `0C 94 00 04`.
+
 ### Framing
 
 All OTA traffic uses 9600 baud 8N1 on the same bus pins as the application
@@ -251,6 +261,7 @@ four states, and all of them are readable over UPDI without writing anything:
 | BOOTEND ≠ `0x08` | app vectors are not relocated; the app dies on its first interrupt | write fuses only: `prog.py --fuses 2:0x02 5:0xc5 8:0x08` (no erase) |
 | all of the above fine | the app runs but will not home/answer: auto-home off, another module id, or a wiped EEPROM | compare `m<id>d` with the dumped id |
 | dump says everything is healthy and the module is still silent | reset loop: the app's `.init3` found no reset flags and reset itself before `setup()` (see "Application hand-over") | reinstall with the current bootloader (`start_app()` must not clear `RSTCTRL.RSTFR`) and app (`src/ResetFlags.cpp`) |
+| bootloader marker says it jumped, app markers never appear, occasional EEPROM bytes change on their own | the hand-over jumped to `0x0400` instead of `0x0800`: GAS `jmp` operands are byte addresses, so `APP_START_BYTE / 2` lands inside the bootloader | `start_app()` must use `jmp APP_START_BYTE`; disassembly bytes at the jump must be `0C 94 00 04` |
 
 `bootloader/tools/dump_eeprom.py` prints fuses, the app header at `0x0800`
 and the EEPROM fields in one read-only session and states the verdict:

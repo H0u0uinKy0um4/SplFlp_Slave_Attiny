@@ -252,6 +252,56 @@ def hexdump(data: bytes, width: int = 16) -> str:
     return "\n".join(lines)
 
 
+# --- Debug breadcrumbs (OTA_DEBUG_MARKERS builds) --------------------------------
+
+DEBUG_STAGE_NAMES = {
+    1: ".init3 (app reset-flag hook)",
+    2: "global constructor (before main)",
+    3: "setup() entered",
+    4: "setupRS485() returned",
+    5: "waitOnBroadCast() returned",
+    6: "home() returned",
+    7: "loop() entered",
+}
+
+
+def decode_debug(eeprom: bytes) -> list[str] | None:
+    """Decode the 244..254 breadcrumbs written by an OTA_DEBUG_MARKERS build."""
+    markers = {index: eeprom[index] for index in range(244, 255)}
+    if all(value == 0xFF for value in markers.values()):
+        return None
+
+    def stage(value: int) -> str:
+        if value == 0xFF or value == 0:
+            return "never reached"
+        return f"{value} = {DEBUG_STAGE_NAMES.get(value, 'unknown')}"
+
+    reset = markers[248]
+    reset_bits = [name for bit, name in (
+        (0x01, "POR"), (0x02, "BOD"), (0x04, "EXT"), (0x08, "WDT"),
+        (0x10, "SWR"), (0x20, "UPDI")) if reset & bit]
+
+    app_word = markers[245] | (markers[246] << 8)
+    staying = markers[247]
+    staying_text = {0xAA: "yes (would not have jumped)",
+                    0x55: "no (boot window, then jump)"}.get(staying, f"0x{staying:02X}")
+
+    return [
+        f"app .init3 raw   : "
+        f"{'yes (0x77)' if markers[244] == 0x77 else 'no (0x%02X)' % markers[244]}",
+        f"bootloader boots : {markers[250]}   jumped to app: "
+        f"{'yes' if markers[251] == 0x5A else 'NO (0x%02X)' % markers[251]}",
+        f"bootloader saw   : app word {app_word:#06x} at 0x0800, stay in update: {staying_text}",
+        f"last reset flags : 0x{reset:02X}"
+        + (f" ({', '.join(reset_bits)})" if reset_bits else ""),
+        f"app boots        : {markers[252]}",
+        f"app stage now    : {stage(markers[253])}",
+        f"app stage before : {stage(markers[254])}",
+        f"loop heartbeat   : "
+        f"{'yes' if markers[249] == 0x9B else 'no (0x%02X)' % markers[249]}",
+    ]
+
+
 def report(state: dict, layout: dict[str, int]) -> str:
     levels = {"error": "!!", "warn": " ?", "ok": "  ", "info": "  "}
     lines = [
@@ -281,6 +331,8 @@ def main() -> int:
     parser.add_argument("--baud", default="230400", help="UPDI baud rate (default: %(default)s)")
     parser.add_argument("--prog", default=None, help="path to megaTinyCore's prog.py")
     parser.add_argument("--raw", action="store_true", help="hexdump the whole EEPROM")
+    parser.add_argument("--debug", action="store_true",
+                        help="decode the OTA_DEBUG_MARKERS breadcrumbs at EEPROM 244-254")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("-v", "--verbose", action="store_true", help="pymcuprog INFO logging")
     args = parser.parse_args()
@@ -364,6 +416,14 @@ def main() -> int:
     else:
         print(f"UPDI {args.port} @ {args.baud}  ({DEVICE})\n")
         print(report(state, layout))
+        if args.debug:
+            debug_lines = decode_debug(eeprom)
+            print("\nDebug markers (EEPROM 244-254):")
+            if debug_lines is None:
+                print("  none (build without -DOTA_DEBUG_MARKERS, or never booted)")
+            else:
+                for line in debug_lines:
+                    print(f"  {line}")
         for warning in warnings:
             print(f"  (note: {warning})")
         if args.raw:

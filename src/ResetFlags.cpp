@@ -20,10 +20,19 @@
 // linkage, global scope) or this stops being an override.
 
 #include <Arduino.h>
+#include "DebugMark.h"
 
 void init_reset_flags()
 {
     uint8_t flags = RSTCTRL.RSTFR;
+
+    // Bench proof that this hook runs at all.  The motor tick needs no EEPROM
+    // and no C++ runtime, so it separates "the app never started" from "the
+    // app started but the EEPROM write path is stuck".
+    debugMotorTick();
+    debugMarkRaw(DBG_EE_RAW, DBG_RAW_MARK_VALUE);
+    debugMark(DBG_STAGE_INIT3);
+
     RSTCTRL.RSTFR = flags;
     GPIOR0 = flags;
 }

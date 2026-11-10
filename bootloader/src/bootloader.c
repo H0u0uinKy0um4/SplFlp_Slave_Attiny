@@ -104,6 +104,27 @@ static void eeprom_write_byte(uint8_t index, uint8_t value)
     nvm_wait();
 }
 
+#ifdef OTA_DEBUG_MARKERS
+/* Bench breadcrumbs; see src/DebugMark.h in the app for the address map.
+   Kept out of normal builds: they cost a few EEPROM writes per boot. */
+#define DBG_EE_RESET_FLAGS 248
+#define DBG_EE_APP_WORD_LO 245
+#define DBG_EE_APP_WORD_HI 246
+#define DBG_EE_STAYING     247
+#define DBG_EE_BL_BOOTS    250
+#define DBG_EE_BL_JUMPED   251
+#define DBG_BL_JUMPED_VALUE 0x5A
+#define DBG_BL_STAYING_VALUE 0xAA
+
+static void debug_mark_boot(void)
+{
+    uint8_t boots = *(volatile uint8_t *)(MAPPED_EEPROM + DBG_EE_BL_BOOTS);
+    boots = (boots == 0xFF) ? 1 : (uint8_t)(boots + 1);
+    eeprom_write_byte(DBG_EE_RESET_FLAGS, RSTCTRL_RSTFR);
+    eeprom_write_byte(DBG_EE_BL_BOOTS, boots);
+}
+#endif
+
 /* ------------------------------------------------------------------ */
 /* Bit-banged UART                                                     */
 /* ------------------------------------------------------------------ */
@@ -378,6 +399,10 @@ static void start_app(void)
         ;
     _PROTECTED_WRITE(WDT_CTRLA, WDT_PERIOD_OFF_gc);
 
+#ifdef OTA_DEBUG_MARKERS
+    eeprom_write_byte(DBG_EE_BL_JUMPED, DBG_BL_JUMPED_VALUE);
+#endif
+
     /* Reset flags are deliberately left as the hardware set them.  The
        Arduino core's .init3 hook (init_reset_flags() in megaTinyCore's
        main.cpp) reads RSTCTRL.RSTFR, clears it, and issues a SOFTWARE RESET
@@ -389,9 +414,11 @@ static void start_app(void)
     VPORTA_OUT = 0x00;                          /* state (all inputs)    */
 
     /* BOOTEND makes the hardware relocate the app vector table to
-       APP_START_BYTE, so a plain jump is all that is needed.  jmp takes a
-       WORD address. */
-    __asm__ __volatile__("jmp " STR(APP_START_WORD));
+       APP_START_BYTE, so a plain jump is all that is needed.  GNU as takes
+       jmp operands as BYTE addresses and encodes the word address itself;
+       using APP_START_BYTE/2 here would jump to 0x0400 (inside this
+       bootloader) instead of 0x0800. */
+    __asm__ __volatile__("jmp " STR(APP_START_BYTE));
     __builtin_unreachable();
 }
 
@@ -533,6 +560,10 @@ static void handle_frame(void)
 
 int main(void)
 {
+#ifdef OTA_DEBUG_MARKERS
+    debug_mark_boot();
+#endif
+
     /* OSCCFG fuse already selects the 20 MHz internal oscillator (factory
        default).  Make sure the clock prescaler is disabled so bit timings
        match F_CPU. */
@@ -547,6 +578,14 @@ int main(void)
     staying = (*(volatile uint8_t *)(MAPPED_EEPROM + OTA_EEPROM_BOOT_FLAG_ADDR)
                == OTA_BOOT_FLAG_VALUE)
               || !app_looks_present();
+#ifdef OTA_DEBUG_MARKERS
+    {
+        uint16_t app_word = *(volatile uint16_t *)(MAPPED_FLASH + APP_START_BYTE);
+        eeprom_write_byte(DBG_EE_APP_WORD_LO, (uint8_t)(app_word & 0xFF));
+        eeprom_write_byte(DBG_EE_APP_WORD_HI, (uint8_t)(app_word >> 8));
+        eeprom_write_byte(DBG_EE_STAYING, staying ? DBG_BL_STAYING_VALUE : 0x55);
+    }
+#endif
     uint16_t window_left_ms = BOOT_WAIT_MS;    /* boot window when !staying */
 
     while (WDT_STATUS & WDT_SYNCBUSY_bm)

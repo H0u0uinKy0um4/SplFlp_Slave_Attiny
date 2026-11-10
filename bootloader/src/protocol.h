@@ -70,7 +70,9 @@
 #define BOOTLOADER_PAGES    8       /* BOOTEND fuse value (x256 bytes) */
 #define BOOTLOADER_SIZE     (BOOTLOADER_PAGES * 256)   /* 2048 bytes  */
 #define APP_START_BYTE      0x0800  /* Application starts here        */
-#define APP_START_WORD      (APP_START_BYTE / 2)       /* For asm jmp */
+/* No APP_START_WORD: GNU as takes jmp operands as *byte* addresses and
+   encodes the word address itself.  Passing 0x400 here jumps to 0x0400,
+   i.e. into the bootloader, not to the app at 0x0800. */
 #define FLASH_PAGE_SIZE     64      /* ATtiny1616 page size           */
 #define FLASH_TOTAL_SIZE    16384   /* 16 KB                          */
 #define APP_MAX_SIZE        (FLASH_TOTAL_SIZE - BOOTLOADER_SIZE) /* 14336 */
