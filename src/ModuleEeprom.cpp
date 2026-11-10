@@ -142,11 +142,35 @@ void SplitFlapModule::loadOnBoot()
   EEPROM.get(ADDR_HOME_OFFSET, stepper.homeOffset);
   EEPROM.get(ADDR_MODULE_ID, id);
   EEPROM.get(ADDR_TOTAL_STEPS, stepper.totalStepsPerRev);
-  EEPROM.get(ADDR_SAVED_POS, stepper.currentStepPos);
-  EEPROM.get(ADDR_SAVED_INDEX, stepper.currentFlapIndex);
   autoHomeEnabled = (EEPROM.read(ADDR_AUTO_HOME) == 1);
-  loadFlapChars();
 
+  // The saved position is only a hint.  A move homes first unless the boot
+  // sequence already homed, so a stale or uninitialised EEPROM value can never
+  // make a move silently claim success without turning the motor.
+  stepper.currentStepPos   = 0;
+  stepper.currentFlapIndex = -1;
+  stepper.positionKnown    = false;
+
+  migrateMapFormat();
+  loadFlapChars();
+}
+
+// Legacy firmware stored map entries relative to flap 0.  The current
+// coordinate system counts from the hall entering edge, so add homeOffset once
+// and tag the format.  See PROTOCOL.md.
+void SplitFlapModule::migrateMapFormat()
+{
+  if (EEPROM.read(ADDR_FORMAT) == FORMAT_VALUE) return;
+  if (stepper.totalStepsPerRev == 0) return;
+
+  for (uint8_t i = 0; i < DRUM_SIZE; i++) {
+    uint16_t pos;
+    EEPROM.get(ADDR_MAP_START + i * sizeof(pos), pos);
+    if (pos == 0xFFFF) continue;
+    pos = (uint16_t)(((long)pos + stepper.homeOffset) % stepper.totalStepsPerRev);
+    EEPROM.put(ADDR_MAP_START + i * sizeof(pos), pos);
+  }
+  EEPROM.write(ADDR_FORMAT, FORMAT_VALUE);
 }
 void SplitFlapModule::firstBoot()
 {
@@ -164,4 +188,5 @@ void SplitFlapModule::firstBoot()
         flapChars[i] = c;
     }
     clearMap();
+    EEPROM.write(ADDR_FORMAT, FORMAT_VALUE);
 }

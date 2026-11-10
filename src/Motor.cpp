@@ -31,19 +31,21 @@ void Motor::applyStep(const uint8_t *step)
     digitalWrite(IN4, step[3]);
 }
 
-void Motor::stepBackward(int steps)
+void Motor::stepBackward(int steps, bool watchHall)
 {
-    // static bool lastHallState = false; // Persists across calls to detect rising edge
-
     for (int k = 0; k < steps; k++) {
-        /*
-        bool hallNow = hallActive();
-
-        if (hallNow && !lastHallState) {
-            currentStepPos = totalStepsPerRev - homeOffset;
+        // Mid-move re-referencing: while a move crosses the hall magnet, watch
+        // for the entering edge (inactive -> active) and zero the position
+        // exactly like homeModule() does.  This is the only drift correction;
+        // without it missed steps accumulate forever.  See PROTOCOL.md.
+        if (watchHall) {
+            bool hallNow = hallActive();
+            if (hallNow && !hallWatchLast) {
+                currentStepPos = 0;
+                hallReferenced = true;
+            }
+            hallWatchLast = hallNow;
         }
-        lastHallState = hallNow;
-        */
 
         currentPhase--;
         if (currentPhase < 0) currentPhase = 7;
@@ -57,8 +59,22 @@ void Motor::stepBackward(int steps)
     }
 }
 
+// Arm mid-move hall re-referencing.  Sampling the current hall state as the
+// baseline prevents a false entering edge when a watched move starts while
+// the reel already sits on the magnet (the first edge seen would then be the
+// leaving edge, which must not re-zero the position).
+void Motor::beginHallWatch()
+{
+    hallWatchLast = hallActive();
+    hallReferenced = false;
+}
+
+
 long Motor::countPerRev()
 {
+  // Measuring moves the reel arbitrarily, so the position is no longer known
+  // until the caller homes afterwards.
+  positionKnown = false;
   long safety = 0;
 
   // Phase 1: If already on the magnet, move off it first
@@ -68,46 +84,76 @@ long Motor::countPerRev()
     delay(5);
   }
 
-  // Phase 2: Find the leading edge of the magnet
+  // Phase 2: Find the entering edge of the magnet
   safety = 0;
   while (!hallActive() && safety < 5000) {
     stepBackward(1);
     safety++;
   }
+  if (!hallActive()) return -1;  // Hall never triggered: do not store a guess.
 
-  // Phase 3: Find the trailing edge of the magnet (so we start counting from a clean edge)
-  while (hallActive()) {
+  // Phase 3: Find the trailing edge of the magnet (so we start counting from a
+  // clean edge).  Capped so a stuck sensor cannot hang the firmware.
+  safety = 0;
+  while (hallActive() && safety < 5000) {
     stepBackward(1);
+    safety++;
   }
+  if (hallActive()) return -1;
 
-  // Phase 4: Count steps for one full revolution (trailing edge → next trailing edge)
-  int measuredSteps = 0;
-  while (!hallActive() && measuredSteps < 5000) {
+  // Phase 4: Count steps for one full revolution (trailing edge → next trailing
+  // edge).  Both loops are capped for the same reason.
+  long measuredSteps = 0;
+  safety = 0;
+  while (!hallActive() && safety < 5000) {
     stepBackward(1);
     measuredSteps++;
+    safety++;
   }
-  while (hallActive()) {
+  if (!hallActive()) return -1;
+  safety = 0;
+  while (hallActive() && safety < 5000) {
     stepBackward(1);
     measuredSteps++;
+    safety++;
   }
+  if (hallActive()) return -1;
   return measuredSteps;
 }
 
 void Motor::homeModule() {
-  long safety = 0;
+  positionKnown = false;
 
-  // Step until the Hall sensor triggers, or bail after slightly more than one
-  // full revolution (prevents infinite loops if sensor is broken/missing).
-  while (!hallActive() && safety < (totalStepsPerRev + 500)) {
+  // Leave the magnet first so the reference is always the same entering edge,
+  // even when homing starts with the reel already on the hall magnet.
+  long safety = 0;
+  while (hallActive() && safety < (long)totalStepsPerRev + 500) {
     stepBackward(1);
     safety++;
   }
 
-  // Advance the calibrated offset to reach flap 0
+  // Seek the entering edge of the magnet.  Bail out after slightly more than
+  // one revolution so a broken or missing sensor cannot hang the module.
+  safety = 0;
+  while (!hallActive() && safety < (long)totalStepsPerRev + 500) {
+    stepBackward(1);
+    safety++;
+  }
+
+  if (!hallActive()) {
+    // Never claim a known position when the reference was not found.
+    releaseMotor();
+    return;
+  }
+
+  // Advance the calibrated offset from the entering edge to flap 0.
   stepBackward(homeOffset);
 
-  // We're now at flap 0 — reset tracking
-  currentStepPos   = 0;
+  // In the hall-edge coordinate system flap 0 sits at homeOffset.
+  currentStepPos   = totalStepsPerRev > 0
+                         ? homeOffset % totalStepsPerRev
+                         : homeOffset;
   currentFlapIndex = 0;
+  positionKnown    = true;
   releaseMotor();
 }

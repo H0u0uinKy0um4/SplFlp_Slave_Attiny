@@ -24,7 +24,6 @@ class SplitFlapModule
     void saveTotalSteps();
     void setHomeOffset(int homeOffset);
     void setModuleId(int moduleId);
-    void setAutoHomeEnabled(int enabled);
     void setStepsPerRev(int StepsPerRev);
     void setAutoHome(int enable);
     //Map
@@ -39,15 +38,16 @@ class SplitFlapModule
     void loadOnBoot();
     bool checkFirstBoot();
     void firstBoot();
+    void migrateMapFormat();
   //Commands
     void Calibrate();
-    bool Debug();
     void moveToFlap(char Flap);
     void moveToIndex(int index);
     void moveToStep(int steps);
     void home();
     uint16_t getCurrentStepPos() const { return stepper.currentStepPos; }
     int getHomeOffset() const { return stepper.homeOffset; }
+    bool isPositionKnown() const { return stepper.positionKnown; }
 
 private:
   static constexpr int ADDR_INIT        = 0;
@@ -55,11 +55,13 @@ private:
   static constexpr int ADDR_TOTAL_STEPS = 3;
   static constexpr int ADDR_MODULE_ID   = 5;
   static constexpr int ADDR_AUTO_HOME   = 6;
-  static constexpr int ADDR_SAVED_POS   = 7;
-  static constexpr int ADDR_SAVED_INDEX = 9;
+  // Addresses 7..11 previously held a saved position/index; the position is
+  // now established by homing on boot, so they stay unused.
   static constexpr int ADDR_MAP_START   = 12;
   static constexpr int ADDR_MAP_CHARS = 140;
+  static constexpr int ADDR_FORMAT      = 204;
   static constexpr uint8_t INIT_VALUE = 0x5D;
+  static constexpr uint8_t FORMAT_VALUE = 0x02;
   
 
   bool autoHomeEnabled=true;

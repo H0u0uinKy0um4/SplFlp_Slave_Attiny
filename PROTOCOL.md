@@ -24,8 +24,7 @@ line). `*` in the id field addresses every module.
   drift correction; `totalStepsPerRev` only has to be close enough for the
   wrap and the fallback positions.
 - `homeOffset` is the `pos` at which flap 0 is centred. It is one number, not
-  a coordinate system. Changing it never moves the position map.
-- `map[i]` is the `pos` at which flap i is centred, or `0xFFFF` when unset.
+  a coordinate system. Changing it never moves the position map.- `map[i]` is the `pos` at which flap i is centred, or `0xFFFF` when unset.
   The fallback for an unset entry is
   `homeOffset + round(i * totalStepsPerRev / 64)`, modulo
   `totalStepsPerRev`.
@@ -38,17 +37,29 @@ coordinate format is tagged at EEPROM address 204.
 
 - Motion is **forward only**. A nudge left takes the long way around. This
   keeps backlash identical for every measurement.
-- Moves are **non-blocking**: `update()` advances at most one half-step per
-  millisecond, so the RS485 parser keeps running while modules move. A burst
-  of commands to many modules no longer overflows the input buffer.
-- A move is shorter than one revolution and may cross at most one hall edge.
-  On that edge the remaining distance is recomputed from `pos = 0`.
-- A move that would need a second edge (target outside the real revolution,
-  usually a wrong `totalStepsPerRev`) stops, marks the position unknown and
-  reports the failure through the state query. It never silently claims
-  success.
-- If the position is unknown (boot without auto-home, or a failed move), the
-  next move homes first and then continues to the requested target.
+- Moves are **blocking**: the slave runs the whole step loop before it parses
+  the next command. The RS485 parser is therefore stalled while a module turns,
+  so the master must not query a module immediately after a movement command.
+  The master defers that refresh by `MOVE_SETTLE_MS` (5 s) instead.
+- Position is **re-referenced on every hall crossing**. `pos` is incremented
+  once per half-step and wraps at `totalStepsPerRev`; when a move's forward
+  path crosses the hall magnet (or passes within `HALL_WATCH_TOLERANCE` steps
+  of it, half a flap), the firmware watches for the entering edge. On that
+  edge `pos` is set to `0` exactly like a home and the move's remaining
+  distance is recomputed from the true position, so the move still lands
+  exactly on target even when steps were missed earlier. Drift therefore
+  cannot survive a magnet crossing. Moves that never pass the magnet stay
+  open loop. Re-home after a mechanical disturbance or a wrong revolution
+  count.
+- A move that starts while the reel already sits on the magnet still works:
+  the watch is armed with the current hall state, so only the *entering*
+  edge (inactive -> active) re-references the position. The leaving edge
+  never does.
+- If the position is unknown (boot without auto-home, a failed home, or a
+  calibration), the next move homes first and then continues to the requested
+  target. A failed home leaves the position unknown and the move is skipped.
+- `busy` is always `0` by the time `s` is answered because moves are blocking.
+  It is kept in the response for protocol compatibility.
 
 ## Commands
 
@@ -61,7 +72,7 @@ coordinate format is tagged at EEPROM address 204.
 | `m<id>g<pos>` | Move to an absolute `pos` (`0..totalStepsPerRev-1`, wrapped). |
 | `m<id>h` | Home: seek the entering edge, then move to `homeOffset` (flap 0). |
 | `m<id>c` | Measure one revolution between two entering edges, store `totalStepsPerRev`, then go to flap 0. **Blocking for several seconds**; manual diagnostic only. |
-| `m<id>r<index>` | Record the current `pos` as `map[index]`. Index 0 also sets `homeOffset`. Refused while busy or while the position is unknown. |
+| `m<id>r<index>` | Record the current `pos` as `map[index]`. Index 0 also sets `homeOffset`. Refused while the position is unknown. |
 
 The movement commands return immediately; use `s` to observe progress.
 
@@ -70,7 +81,7 @@ The movement commands return immediately; use `s` to observe progress.
 | Command | Meaning |
 | --- | --- |
 | `m<id>d` | Config and position map (unchanged format, see below). |
-| `m<id>s` | State: `m<id>s:<pos>:<busy>:<position_known>` |
+| `m<id>s` | State: `m<id>s:<pos>:<busy>:<position_known >` |
 | `m<id>l` | Raw 64-character drum, one character per flap, no prefix (a leading space is significant). |
 | `m<id>o<pos>` | Store `homeOffset`. |
 | `m<id>t<steps>` | Store `totalStepsPerRev`. |
@@ -93,8 +104,8 @@ present. New state (`pos`, `busy`) is exposed through `s`, not by extending
 `r` response: `m<id>r:<index>:<pos>` on success, `m<id>r:<index>:-1` when the
 record was refused.
 
-`busy` is 1 while a move or home is in progress. `position_known` is 0 after
-a failed move or a boot without auto-home.
+`busy` is always `0` because moves are blocking. `position_known` is 0 after a
+failed home, a boot without auto-home, or before the first move.
 
 ## Typical calibration sequence
 

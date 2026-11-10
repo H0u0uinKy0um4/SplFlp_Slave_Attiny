@@ -13,7 +13,6 @@ extern SplitFlapModule attiny;
 constexpr unsigned long CMD_TIMEOUT_MS = 50;
 
 void setupRS485();
-void readRS485(String & message);
 void sendRS485(String & message);
 void runCommand(char cmd, const char* arg, bool isBroadcast = false);
 void loadCommand();

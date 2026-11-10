@@ -85,10 +85,11 @@ void runCommand(char cmd, const char* arg,bool isBroadcast=false) {
     case 'w': writeMapPosition(arg); break;
     case 'f': writeFlapChar(arg); break; 
     case 'r': {
-      // Record current position as map entry; index 0 also sets home offset (compat)
+      // Record the current position as a map entry.  Index 0 redefines where
+      // flap 0 sits, which also updates the homing offset.
       if (isDigit(*arg)) {
         long idx = atol(arg);
-        if (idx >= 0 && idx < 64) {
+        if (idx >= 0 && idx < 64 && attiny.isPositionKnown()) {
           int cur = attiny.getCurrentStepPos();
           attiny.setMapPosition((int)idx, cur);
           if (idx == 0) {
@@ -102,8 +103,10 @@ void runCommand(char cmd, const char* arg,bool isBroadcast=false) {
       break;
     }
     case 's': {
-      // State query: pos:busy:position_known
-      message = "m" + String(attiny.getId()) + "s:" + String(attiny.getCurrentStepPos()) + ":0:1";
+      // State query: pos:busy:position_known.  Moves are blocking, so busy is
+      // always 0 by the time the command is parsed.
+      message = "m" + String(attiny.getId()) + "s:" + String(attiny.getCurrentStepPos()) +
+                ":0:" + String(attiny.isPositionKnown() ? 1 : 0);
       break;
     }
     
