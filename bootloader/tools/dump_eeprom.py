@@ -159,6 +159,14 @@ def _flag_armed_text(state: dict, layout: dict[str, int]) -> str:
             f"(the bootloader handles RESET and clears the flag).")
 
 
+def _handover_hint() -> tuple[str, str]:
+    return (
+        "info",
+        "if the module is silent anyway, the hand-over cleared the reset flags and "
+        "the app reset itself before setup() (a ~500 ms reset loop): reinstall with "
+        "the current bootloader; see PROTOCOL.md, 'Application hand-over'.")
+
+
 def _verdicts(state: dict, layout: dict[str, int]) -> list[tuple[str, str]]:
     """Return (level, text) pairs; level is 'error', 'warn' or 'ok'."""
     out: list[tuple[str, str]] = []
@@ -192,6 +200,7 @@ def _verdicts(state: dict, layout: dict[str, int]) -> list[tuple[str, str]]:
                 "ok",
                 f"boot flag clear, application present at {APP_START:#06x}: the "
                 f"bootloader listens for 500 ms after reset, then jumps to the app."))
+            out.append(_handover_hint())
         return out
 
     if state["boot_flag_armed"]:
@@ -206,6 +215,7 @@ def _verdicts(state: dict, layout: dict[str, int]) -> list[tuple[str, str]]:
             "ok",
             f"boot flag clear, application present at {APP_START:#06x}: the "
             f"bootloader listens for 500 ms after reset, then jumps to the app."))
+        out.append(_handover_hint())
 
     if state["auto_home"] != 1:
         out.append((

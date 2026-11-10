@@ -148,6 +148,23 @@ application must be built with the `ATtiny1616_OTA` environment (linked at
   CMD_RESET. A cancelled or interrupted session leaves the module in the
   bootloader, ready for a re-flash.
 
+### Application hand-over
+
+The jump to `0x0800` must be a plain `jmp` with the hardware state left as
+close to reset as possible, with one hard rule: **never clear
+`RSTCTRL.RSTFR` before jumping**. The Arduino core's `.init3` hook
+(`init_reset_flags()` in megaTinyCore's `main.cpp`) reads the reset flags,
+clears them, and issues a software reset when it finds none — the assumption
+being that a chip with no flags did not come through a real reset. A
+bootloader that clears them first therefore bounces the application straight
+back into the bootloader: a reset loop every ~500 ms in which `setup()` never
+runs, so the module neither homes nor answers ASCII, while UPDI still works
+and every fuse/EEPROM field looks perfectly healthy.
+
+The app also overrides that hook (`src/ResetFlags.cpp`) with the same
+bookkeeping minus the forced reset, so a hand-over that does clear the flags
+cannot produce this loop.
+
 ### Framing
 
 All OTA traffic uses 9600 baud 8N1 on the same bus pins as the application
@@ -233,6 +250,7 @@ four states, and all of them are readable over UPDI without writing anything:
 | `0x0800` reads `FF FF` | no application installed | run `flash_mqtt.py`, or re-run `install.py` |
 | BOOTEND ≠ `0x08` | app vectors are not relocated; the app dies on its first interrupt | write fuses only: `prog.py --fuses 2:0x02 5:0xc5 8:0x08` (no erase) |
 | all of the above fine | the app runs but will not home/answer: auto-home off, another module id, or a wiped EEPROM | compare `m<id>d` with the dumped id |
+| dump says everything is healthy and the module is still silent | reset loop: the app's `.init3` found no reset flags and reset itself before `setup()` (see "Application hand-over") | reinstall with the current bootloader (`start_app()` must not clear `RSTCTRL.RSTFR`) and app (`src/ResetFlags.cpp`) |
 
 `bootloader/tools/dump_eeprom.py` prints fuses, the app header at `0x0800`
 and the EEPROM fields in one read-only session and states the verdict:

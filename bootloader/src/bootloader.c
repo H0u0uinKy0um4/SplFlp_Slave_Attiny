@@ -377,7 +377,14 @@ static void start_app(void)
     while (WDT_STATUS & WDT_SYNCBUSY_bm)
         ;
     _PROTECTED_WRITE(WDT_CTRLA, WDT_PERIOD_OFF_gc);
-    RSTCTRL_RSTFR = 0x0F;                       /* clear reset flags     */
+
+    /* Reset flags are deliberately left as the hardware set them.  The
+       Arduino core's .init3 hook (init_reset_flags() in megaTinyCore's
+       main.cpp) reads RSTCTRL.RSTFR, clears it, and issues a SOFTWARE RESET
+       when it finds no flags at all, on the assumption that a chip with zero
+       flags did not come through a real reset.  Clearing them here therefore
+       bounces the app straight back into the bootloader: reset loop, no
+       setup(), no homing, no RS485.  Never clear RSTFR on the hand-over. */
     VPORTA_DIR = 0x00;                          /* bus pins to reset     */
     VPORTA_OUT = 0x00;                          /* state (all inputs)    */
 
