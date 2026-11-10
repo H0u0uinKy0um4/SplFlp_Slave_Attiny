@@ -221,3 +221,37 @@ publishes `begin`/`chunk`/`flash` on the master's
 `<prefix>/command/firmware` topic — chunks of 768 image bytes
 (padding-free base64 per chunk), plus `--cancel` and `--reset` for the
 recovery paths above and `--watch` to follow the `ota` status object.
+
+### Diagnosing a silent module (UPDI)
+
+A module that neither homes nor answers `m<id>d` is almost always in one of
+four states, and all of them are readable over UPDI without writing anything:
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| boot flag at EEPROM 255 armed (`0xB0`) | the module stayed in update mode after a cancelled session or a power cut | `{"action":"reset","module":N}` (the bootloader handles RESET and clears the flag), or a full RS485 flash |
+| `0x0800` reads `FF FF` | no application installed | run `flash_mqtt.py`, or re-run `install.py` |
+| BOOTEND ≠ `0x08` | app vectors are not relocated; the app dies on its first interrupt | write fuses only: `prog.py --fuses 2:0x02 5:0xc5 8:0x08` (no erase) |
+| all of the above fine | the app runs but will not home/answer: auto-home off, another module id, or a wiped EEPROM | compare `m<id>d` with the dumped id |
+
+`bootloader/tools/dump_eeprom.py` prints fuses, the app header at `0x0800`
+and the EEPROM fields in one read-only session and states the verdict:
+
+```bash
+python3 bootloader/tools/dump_eeprom.py                 # summary + verdicts
+python3 bootloader/tools/dump_eeprom.py --raw --json    # full dump
+```
+
+The raw fuse values can also be read with prog.py alone; offsets 2, 5 and 8
+must be `0x02`, `0xC5` and `0x08`:
+
+```bash
+python3 ~/.platformio/packages/framework-arduino-megaavr-megatinycore/tools/prog.py \
+  --tool uart --device attiny1616 --uart /dev/ttyUSB0 -b 230400 -v --fuses_print
+```
+
+Never "fix" a module by uploading the OTA build over UPDI with PlatformIO:
+megaTinyCore writes BOOTEND = 0 on a UPDI upload, which removes the
+relocation the app depends on. UPDI uploads are for recovery only, and then
+always via `install.py` (which merges bootloader + app and writes the fuses).
+
