@@ -12,7 +12,7 @@ diagnostics are in [`../PROTOCOL.md`](../PROTOCOL.md); the version rules are in
 Edit `include/FirmwareVersion.h`:
 
 ```c
-#define FW_COMPAT 1        // leave this unless the contract broke
+#define FW_BUS_COMPAT 1    // leave this unless the slave <-> master contract broke
 #define FW_RELEASE "0.1"   // bump for every uploaded image
 ```
 
@@ -95,7 +95,7 @@ Any one of these closes the loop; together they are conclusive:
 | Panel -> module inspector | `FIRMWARE` stat shows the new version after the post-OTA refresh. |
 | Panel -> firmware card | "Installed firmware: `<version>`" for the selected module. |
 | RS485 console | `m3v` -> `m3v:1:1.0.1`; `m3s` -> `m3s:<pos>:0:1:1:1.0.1`. |
-| UPDI | `python3 bootloader/tools/dump_eeprom.py` prints `Version : 1.0.1` and `compat=1`. |
+| UPDI | `python3 bootloader/tools/dump_eeprom.py` prints `Version : 1.0.1` and `bus compat=1`. |
 
 If the version stays old after `session complete`, the module either never
 rebooted into the new app or the app predates version tracking. Check
@@ -137,7 +137,7 @@ rules that must not be regressed.
 
 ## Master and Home Assistant changes
 
-The master reports the slave's `compat`/`fw_version` and the panel displays
+The master reports the slave's `bus_compat`/`fw_version` and the panel displays
 them. If either side changed:
 
 - master: rebuild and flash the ESP32 (`pio run -t upload` in `SplFlp_Master`);

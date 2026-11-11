@@ -81,8 +81,8 @@ The movement commands return immediately; use `s` to observe progress.
 | Command | Meaning |
 | --- | --- |
 | `m<id>d` | Config and position map (unchanged format, see below). |
-| `m<id>s` | State: `m<id>s:<pos>:<busy>:<position_known>:<compat>:<fw_version>` |
-| `m<id>v` | Application version: `m<id>v:<compat>:<fw_version>` (empty slot -> empty version). |
+| `m<id>s` | State: `m<id>s:<pos>:<busy>:<position_known>:<bus_compat>:<fw_version>` |
+| `m<id>v` | Application version: `m<id>v:<bus_compat>:<fw_version>` (empty slot -> empty version). |
 | `m<id>l` | Raw 64-character drum, one character per flap, no prefix (a leading space is significant). |
 | `m<id>o<pos>` | Store `homeOffset`. |
 | `m<id>t<steps>` | Store `totalStepsPerRev`. |
@@ -109,28 +109,31 @@ record was refused.
 `busy` is always `0` because moves are blocking. `position_known` is 0 after a
 failed home, a boot without auto-home, or before the first move.
 
-`compat` is the cross-repo compatibility generation and `fw_version` is the
-application version from the EEPROM slot (see below). Both are trailing
-fields, so a master that only knows the three-field form still parses
-`position_known` correctly; the rest is ignored. An empty slot leaves
-`fw_version` empty (the line still ends with the colon after `compat`).
+`bus_compat` is the slave <-> master compatibility generation (RS485 application
+protocol and OTA entry contract) and `fw_version` is the application version
+from the EEPROM slot (see below). Both are trailing fields, so a master that
+only knows the three-field form still parses `position_known` correctly; the
+rest is ignored. An empty slot leaves `fw_version` empty (the line still ends
+with the colon after `bus_compat`). The master <-> Home Assistant MQTT format
+has its own generation and never appears on this bus.
 
 ## Application firmware version
 
 The version lives in `include/FirmwareVersion.h`:
 
 ```c
-#define FW_COMPAT 1          // shared with master + Home Assistant
-#define FW_RELEASE "0.0"     // per-repo release inside that generation
-#define FW_VERSION "1.0.0"   // built from the two above
+#define FW_BUS_COMPAT 1      // shared with the master (slave <-> master side)
+#define FW_RELEASE "0.1"     // per-repo release inside that generation
+#define FW_VERSION "1.0.1"   // built from the two above
 ```
 
-`FW_COMPAT` is the **big compatibility number** shared by all three repos. It
-changes only for a breaking contract change. `FW_RELEASE` is this firmware's
-own release inside that generation. The full version is always
-`<compat>.<release>`, so `1.4.2` means compatibility generation 1, release
-4.2. The full model and bump procedure are in
-[`docs/VERSIONING.md`](docs/VERSIONING.md).
+`FW_BUS_COMPAT` is the **big compatibility number for the bus side**. It changes
+only for a breaking slave <-> master contract change. `FW_RELEASE` is this
+firmware's own release inside that generation. The full version is always
+`<bus_compat>.<release>`, so `1.4.2` means bus generation 1, release 4.2.
+The master carries a second, independent generation for the MQTT JSON format it
+speaks to Home Assistant; the slave does not. The full model and bump procedure
+are in [`docs/VERSIONING.md`](docs/VERSIONING.md).
 
 On every boot the app compares `FW_VERSION` with the EEPROM slot at address
 205 (8 bytes, zero padded) and calls `EEPROM.update()` only for the bytes that
@@ -146,7 +149,7 @@ EEPROM 255        OTA boot flag (bootloader-owned)
 Three ways to read it: `m<id>v` / the last two fields of `m<id>s` (over
 RS485), `bootloader/tools/dump_eeprom.py` (over UPDI, also when the module is
 silent), and the Home Assistant module inspector / firmware card, which shows
-the master's `fw_version` and `fw_compat` for the module.
+the master's `fw_version` and `fw_bus_compat` for the module.
 
 Bump `FW_RELEASE` before every build whose image you upload. The flashing log
 reports the image CRC-32 and the module reports its version, so "did the

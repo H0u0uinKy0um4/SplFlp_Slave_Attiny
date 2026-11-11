@@ -56,7 +56,7 @@ LAYOUT_DEFAULTS: dict[str, int] = {
     "map_format": 204,
     "fw_version": 205,
     "fw_version_slot": 8,
-    "fw_compat": 1,
+    "fw_bus_compat": 1,
     "init_value": 0x5D,
     "format_value": 0x02,
     "flag_addr": 255,
@@ -126,17 +126,17 @@ def load_layout() -> tuple[dict[str, int], list[str]]:
         text = version_header.read_text(encoding="utf-8")
     except OSError as exc:
         warnings.append(
-            f"cannot read {version_header} ({exc}); assuming compat {layout['fw_compat']}"
+            f"cannot read {version_header} ({exc}); assuming bus compat {layout['fw_bus_compat']}"
         )
     else:
-        value = _numeric(r"FW_COMPAT\s+(\w+)", text)
+        value = _numeric(r"FW_BUS_COMPAT\s+(\w+)", text)
         if value is None:
             warnings.append(
-                f"{version_header.name}: FW_COMPAT not found, "
-                f"assuming {layout['fw_compat']}"
+                f"{version_header.name}: FW_BUS_COMPAT not found, "
+                f"assuming {layout['fw_bus_compat']}"
             )
         else:
-            layout["fw_compat"] = value
+            layout["fw_bus_compat"] = value
 
     return layout, warnings
 
@@ -158,12 +158,12 @@ def decode(eeprom: bytes, fuses: bytes, app_head: bytes, layout: dict[str, int])
             break
         version += chr(byte)
 
-    version_compat = 0
+    version_bus_compat = 0
     if version:
         try:
-            version_compat = int(version.split(".", 1)[0], 10)
+            version_bus_compat = int(version.split(".", 1)[0], 10)
         except ValueError:
-            version_compat = 0
+            version_bus_compat = 0
 
     state = {
         "fuses": fuses.hex(" ").upper(),
@@ -182,7 +182,7 @@ def decode(eeprom: bytes, fuses: bytes, app_head: bytes, layout: dict[str, int])
         "total_steps": u16(layout["total_steps"]),
         "map_format": eeprom[layout["map_format"]],
         "fw_version": version,
-        "fw_compat": version_compat,
+        "fw_bus_compat": version_bus_compat,
         "boot_flag": flag,
         "boot_flag_armed": flag == layout["flag_value"],
         "eeprom_size": len(eeprom),
@@ -288,12 +288,12 @@ def _verdicts(state: dict, layout: dict[str, int]) -> list[tuple[str, str]]:
             f"{layout['fw_version'] + layout['fw_version_slot'] - 1}: the app "
             f"predates version tracking or has not booted since the install; "
             f"compare the flash image CRC instead."))
-    elif state["fw_compat"] != layout["fw_compat"]:
+    elif state["fw_bus_compat"] != layout["fw_bus_compat"]:
         out.append((
             "warn",
-            f"application compat {state['fw_compat']} does not match this "
-            f"tree's compat {layout['fw_compat']}: the app, master and Home "
-            f"Assistant may not speak the same protocol generation."))
+            f"application bus compat {state['fw_bus_compat']} does not match "
+            f"this tree's bus compat {layout['fw_bus_compat']}: the app and "
+            f"master may not speak the same RS485 generation."))
     return out
 
 
@@ -369,8 +369,10 @@ def report(state: dict, layout: dict[str, int]) -> str:
         f"({'present' if state['app_present'] else 'BLANK'})",
         f"Version : "
         f"{state['fw_version'] or 'unknown (blank EEPROM slot / old firmware)'}"
-        + (f"   compat={state['fw_compat']} (tree expects {layout['fw_compat']})"
-           if state['fw_version'] else f"   tree expects compat {layout['fw_compat']}"),
+        + (f"   bus compat={state['fw_bus_compat']} "
+           f"(tree expects {layout['fw_bus_compat']})"
+           if state['fw_version']
+           else f"   tree expects bus compat {layout['fw_bus_compat']}"),
         f"EEPROM  : init=0x{state['eeprom_init']:02X}  id={state['module_id']}  "
         f"auto-home={state['auto_home']}  home-offset={state['home_offset']}  "
         f"steps/rev={state['total_steps']}  map=0x{state['map_format']:02X}  "
