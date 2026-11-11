@@ -1,6 +1,6 @@
 # Versioning and compatibility
 
-Split-Flap is three repositories that must interoperate:
+Split-Flap is three repositories with two independent contracts:
 
 | Repository | Role | Version constants |
 | --- | --- | --- |
@@ -11,71 +11,108 @@ Split-Flap is three repositories that must interoperate:
 This document is the single source of truth for how those versions relate.
 The wire protocol itself is specified in [`../PROTOCOL.md`](../PROTOCOL.md).
 
-## Two axes
+## Two compatibility axes
 
-Every repository carries two independent numbers:
+The system has two compatibility domains because two different peers talk to
+each other:
 
-| Axis | Meaning | Changes when |
+| Axis | Peer contract | Carried by |
 | --- | --- | --- |
-| **COMPAT** | The shared contract generation. One integer, identical in all three repositories. | A contract changes in a way an older peer cannot handle. |
-| **RELEASE** | The repository's own release inside that generation. | Any release of that repository, including non-breaking fixes. |
+| **BUS_COMPAT** | RS485 application protocol and the OTA/bootloader entry contract | Slave + master |
+| **MQTT_COMPAT** | MQTT status/command JSON schema | Master + Home Assistant |
 
-The human-facing version is composed from both:
+The master is the bridge, so it carries **both** numbers. The slave carries
+only the bus generation; Home Assistant carries only the MQTT generation.
+
+Each repository also has a **RELEASE** inside its generations. The published
+version is composed from the compat numbers that apply to that repository:
 
 ```
-<compat>.<release>          examples: 1.0.0   1.4.2   2.0.0
-   |        |
-   |        +-- per-repo release (minor.patch)
-   +----------- compatibility generation (major)
+slave    <bus>.<release>             1.0.1      bus 1, release 0.1
+master   <bus>.<mqtt>.<release>      1.1.0.0    bus 1, mqtt 1, release 0.0
+HA       <mqtt>.<release>            1.0.1      mqtt 1, release 0.1
 ```
 
-So `1.4.2` means "compatibility generation 1, release 4.2". A consumer can
-decide compatibility from the **first number alone**; the rest is informative.
-There is no separate hidden compatibility flag.
+The leading numbers are compatibility generations; the trailing part is the
+release (minor.patch). A consumer can decide compatibility from the leading
+numbers alone. Explicit fields are also published, so nobody has to parse the
+string to check.
 
-`COMPAT` is deliberately a small, slow-moving number. It is not the app
-version and it is not a date. Bump it only when an old peer would misbehave,
-not merely because behavior changed.
+`BUS_COMPAT` and `MQTT_COMPAT` are deliberately small, slow-moving numbers.
+They are not the app version and not a date. Bump one only when an old peer
+would misbehave, not merely because behavior changed.
 
 ## Current matrix
 
-| Component | Version | COMPAT | Where it is reported |
-| --- | --- | --- | --- |
-| Slave application | `1.0.0` | `1` | `m<id>v:<compat>:<version>`, `m<id>s`, UPDI dump |
-| Master firmware | `1.0.0` | `1` | MQTT status `version`, `compat` |
-| Home Assistant integration | `1.0.0` | `1` | panel header / connection info, WebSocket `version`, `compat` |
-| OTA bootloader protocol | `1` | `1` (separate) | PING reply byte 0 |
+| Component | Version | BUS_COMPAT | MQTT_COMPAT | Where it is reported |
+| --- | --- | --- | --- | --- |
+| Slave application | `1.0.1` | `1` | — | `m<id>v:<bus>:<version>`, `m<id>s`, UPDI dump |
+| Master firmware | `1.1.0.0` | `1` | `1` | MQTT status `version`, `bus_compat`, `mqtt_compat` |
+| Home Assistant integration | `1.0.1` | — | `1` | panel header / connection info, WebSocket `version`, `mqtt_compat` |
+| OTA bootloader protocol | `1` | separate | — | PING reply byte 0 |
 
-The OTA bootloader has its own **OTA protocol generation**
-(`BOOTLOADER_VERSION` / `OTA_PROTOCOL_VERSION`). It is a wire framing version,
-not the application version. The master refuses to start a session when the
-bootloader reports anything else, so an incompatible bootloader can never be
-written to.
+### Why the master version has four components
+
+`1.1.0.0` is not a mistake:
+
+```
+1 . 1 . 0 . 0
+│   │   └─┬─┘
+│   │     └── master release 0.0
+│   └──────── MQTT_COMPAT 1 (master <-> Home Assistant)
+└──────────── BUS_COMPAT 1 (slave <-> master)
+```
+
+The first two numbers are compatibility generations; the rest is the master's
+own release. The status payload repeats them explicitly as `bus_compat` and
+`mqtt_compat`.
+
+### The OTA protocol is a separate axis
+
+`BOOTLOADER_VERSION` (slave) / `OTA_PROTOCOL_VERSION` (master) is the **binary
+OTA wire generation**, not the application version. It changes only when the
+frame layout, escaping, CRC, command numbers or boot policy change. The master
+refuses a session before writing any page when the module reports anything
+else, so an incompatible bootloader can never be written to.
+
+A `BUS_COMPAT` bump does **not** automatically change the OTA protocol. This
+keeps an application-protocol change from forcing a bootloader reflash.
 
 ## What is a breaking change?
 
-Bump `COMPAT` in all three repositories in the same coordinated change when
-any of these changes:
+### BUS_COMPAT (slave + master)
 
-- **Slave ASCII contract**: removing or renaming a command, changing a reply
-  field's meaning or position, changing the module-id rules.
-- **OTA contract**: frame layout, escaping, CRC algorithm, command numbers,
-  boot policy, flash layout, boot flag semantics.
-- **MQTT contract**: removing a command topic/action, renaming a required
-  status field, changing the OTA message schema.
-- **Home Assistant contract**: a WebSocket field or snapshot shape that the
-  panel requires (the panel and integration ship together, but a stale panel
-  must at least be detectable).
+Bump this in the slave and master together when:
 
-These are **not** breaking and only bump `RELEASE`:
+- an RS485 command is removed, renamed, or changes the meaning/position of a
+  reply field;
+- the module-id rules change;
+- the OTA frame layout, escaping, CRC algorithm, command numbers, boot policy,
+  flash layout or boot-flag semantics change.
 
-- adding a new command or a new optional status field;
+### MQTT_COMPAT (master + Home Assistant)
+
+Bump this in the master and HA together when:
+
+- a command topic/action is removed or renamed;
+- a required status field is removed or renamed;
+- the OTA message schema changes incompatibly;
+- a WebSocket/snapshot field the panel requires changes shape.
+
+### Release only
+
+These are additive and bump `RELEASE` only:
+
+- a new command or a new optional status field;
 - appending fields to an existing reply (older peers ignore the tail);
 - bug fixes, performance work, UI changes;
 - changing default settings or calibration values.
 
 When in doubt, ask: "can the previous release still work with the new peer?"
-If yes, it is a release. If no, it is a compatibility bump.
+If yes, it is a release. If no, bump the compatibility number for that domain.
+
+Adding the explicit `bus_compat`/`mqtt_compat` fields while keeping the old
+`compat` aliases is additive, so it did not require an MQTT bump.
 
 ## Runtime checks
 
@@ -85,8 +122,8 @@ from a build date.
 ### Slave
 
 ```text
-m3v   -> m3v:1:1.0.0        compat 1, application 1.0.0
-m3s   -> m3s:<pos>:0:1:1:1.0.0
+m3v   -> m3v:1:1.0.1        bus compat 1, application 1.0.1
+m3s   -> m3s:<pos>:0:1:1:1.0.1
 ```
 
 An old application returns an empty version. The master keeps the module
@@ -96,31 +133,34 @@ The UPDI dump reads the persisted copy independently of the bus:
 
 ```bash
 python3 bootloader/tools/dump_eeprom.py
-# Version : 1.0.0   compat=1 (tree expects 1)
+# Version : 1.0.1   bus compat=1 (tree expects 1)
 ```
 
 ### Master
 
-The master publishes its own generation and each module's reported values in
-the retained status payload:
+The master publishes both compat numbers and each module's bus values in the
+retained status payload:
 
 ```json
 {
   "state": "online",
-  "version": "1.0.0",
-  "compat": 1,
+  "version": "1.1.0.0",
+  "bus_compat": 1,
+  "mqtt_compat": 1,
   "modules": [
     {
       "id": 3,
-      "fw_version": "1.0.0",
-      "fw_compat": 1,
-      "fw_compatible": true
+      "fw_version": "1.0.1",
+      "fw_bus_compat": 1,
+      "fw_bus_compatible": true
     }
   ]
 }
 ```
 
-`fw_compatible` is omitted when the module does not report a version. The
+For older Home Assistant builds the master also keeps `compat` as an alias for
+`mqtt_compat`, and `fw_compat`/`fw_compatible` as aliases for the bus values.
+`fw_bus_compatible` is omitted when the module does not report a version. The
 master does not hide a mismatch: the module stays usable, but HA can warn.
 
 During OTA the `ota` object carries the bootloader protocol generation the
@@ -129,14 +169,15 @@ no page is written.
 
 ### Home Assistant
 
-The integration compares the master's `compat` with its own `COMPAT_VERSION`.
+The integration compares the master's `mqtt_compat` with its own `MQTT_COMPAT`.
 The panel:
 
 - shows `v<version>` in the header and the master version in the connection
   info;
-- shows a warning banner when the master reports a different generation;
+- shows a warning banner when the master reports a different MQTT generation;
 - shows "master version unknown" for firmware that predates this protocol,
-  rather than treating it as compatible.
+  rather than treating it as compatible;
+- shows each module's `fw_version` and `fw_bus_compat` in the firmware card.
 
 The check is advisory for normal display traffic: a mismatch must never block
 recovery, OTA cancellation, or a module reset. It is authoritative only where
@@ -148,36 +189,41 @@ protocol before writing).
 For a non-breaking change, touch only the repository that changed:
 
 1. **Slave**: raise `FW_RELEASE` in `include/FirmwareVersion.h` (for example
-   `"0.0"` -> `"0.1"`). Rebuild and upload. The EEPROM slot updates on the
+   `"0.1"` -> `"0.2"`). Rebuild and upload. The EEPROM slot updates on the
    first boot after the OTA.
 2. **Master**: raise `MASTER_RELEASE` in `include/Version.h`, rebuild and
    flash the ESP32.
 3. **Home Assistant**: raise `VERSION` in `const.py` and `manifest.json` and
    every `?v=` import in `frontend/`. `tests/test_versions.py` enforces the
-   lockstep and the major/compat relationship.
+   lockstep and the major/MQTT_COMPAT relationship.
 
-`COMPAT` stays unchanged, so old and new peers remain compatible.
+The compat numbers stay unchanged, so old and new peers remain compatible.
 
-## Bumping compatibility
+## Bumping a compatibility generation
 
-A compatibility bump is a coordinated release across all three repositories:
+Bump only the domain that broke:
 
-1. Raise `FW_COMPAT`, `MASTER_COMPAT` and `COMPAT_VERSION` to the same new
-   integer.
-2. Reset each `RELEASE` as appropriate (usually to `0.0`); the composed
-   versions become `<new>.0.0`.
-3. Bump the OTA protocol generation only if the bootloader framing or boot
+| Change touches | Raise |
+| --- | --- |
+| RS485 or OTA contract | `FW_BUS_COMPAT`, `MASTER_BUS_COMPAT` |
+| MQTT JSON schema | `MASTER_MQTT_COMPAT`, `MQTT_COMPAT` |
+| Both | all four |
+
+Then:
+
+1. Reset the affected `RELEASE` values as appropriate (usually `0.0`).
+2. Bump the OTA protocol generation only if the bootloader framing or boot
    policy changed, not merely because the application protocol changed.
-4. Update this document's matrix and every version reference in the docs.
-5. Build and test all three repositories. Reinstall bootloader + app through
+3. Update this document's matrix and every version reference in the docs.
+4. Build and test all three repositories. Reinstall bootloader + app through
    `bootloader/tools/install.py` if the bootloader changed; otherwise a normal
    OTA is enough for the slaves.
-6. Tag the coordinated point in all three repositories, for example
-   `compat-2` and `v2.0.0`.
+5. Tag the coordinated point in all three repositories, for example
+   `bus-compat-2` or `mqtt-compat-2`, plus the release tag.
 
-Do not publish a release whose major number disagrees with its repository's
-`COMPAT` constant. The checks in the code and `tests/test_versions.py` exist to
-make that visible immediately.
+Do not publish a release whose leading numbers disagree with the repository's
+`*_COMPAT` constants. The checks in the code and `tests/test_versions.py` exist
+to make that visible immediately.
 
 ## Git tags
 
@@ -186,10 +232,11 @@ running device. Tags are the historical index:
 
 ```bash
 # one per repository, same format
-git tag -a v1.0.0 -m "slave 1.0.0, compat 1"
+git tag -a v1.0.1 -m "slave 1.0.1, bus compat 1"
 
-# when the shared generation changes, tag the coordinated point
-git tag -a compat-2 -m "cross-repo compatibility generation 2"
+# when a shared generation changes, tag the coordinated point
+git tag -a bus-compat-2 -m "slave <-> master compatibility generation 2"
+git tag -a mqtt-compat-2 -m "master <-> HA compatibility generation 2"
 ```
 
 A tag is not a substitute for the runtime fields: when diagnosing a module,
@@ -208,7 +255,8 @@ cd SplFlp_Slave_Attiny
 python3 bootloader/tools/dump_eeprom.py
 
 # Master/HA: what did the retained status carry?
-mosquitto_sub -t 'splitflap/status' -C 1 | jq '{version, compat, modules}'
+mosquitto_sub -t 'splitflap/status' -C 1 \
+  | jq '{version, bus_compat, mqtt_compat, modules}'
 
 # HA: source of truth and frontend lockstep
 cd SplitflapRebuild

@@ -49,14 +49,15 @@ python3 bootloader/tools/dump_eeprom.py
 
 ```c
 // include/FirmwareVersion.h
-#define FW_COMPAT 1        // shared compatibility generation
-#define FW_RELEASE "0.0"   // this firmware's release inside it
-#define FW_VERSION "1.0.0" // composed, persisted in EEPROM 205..212
+#define FW_BUS_COMPAT 1      // slave <-> master compatibility generation
+#define FW_RELEASE "0.1"     // this firmware's release inside it
+#define FW_VERSION "1.0.1"   // composed, persisted in EEPROM 205..212
 ```
 
-`m<id>v` reports `m<id>v:<compat>:<version>`; `m<id>s` ends with the same two
-fields. See [`docs/VERSIONING.md`](docs/VERSIONING.md) for the rules and the
-bump procedure.
+`m<id>v` reports `m<id>v:<bus_compat>:<version>`; `m<id>s` ends with the same
+two fields. The master adds a separate MQTT compatibility generation for the
+Home Assistant side. See [`docs/VERSIONING.md`](docs/VERSIONING.md) for the
+two-axis model, the rules and the bump procedure.
 
 ## Hard rules
 
