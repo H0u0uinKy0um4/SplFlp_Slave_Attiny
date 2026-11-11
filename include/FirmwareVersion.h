@@ -26,7 +26,7 @@
 
 // Bump this for every image you upload. The version is how a module proves
 // which application actually runs after an OTA.
-#define FW_RELEASE "0.0"
+#define FW_RELEASE "0.1"
 
 // Full application version, e.g. "1.0.0". Keep it at most 7 characters:
 // at most one compat digit and a short release, because the EEPROM slot is
