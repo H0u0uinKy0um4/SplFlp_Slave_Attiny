@@ -30,7 +30,7 @@ version is composed from the compat numbers that apply to that repository:
 ```
 slave    <bus>.<release>             1.0.1      bus 1, release 0.1
 master   <bus>.<mqtt>.<release>      1.1.0.0    bus 1, mqtt 1, release 0.0
-HA       <mqtt>.<release>            1.0.1      mqtt 1, release 0.1
+HA       <mqtt>.<release>            1.0.2      mqtt 1, release 0.2
 ```
 
 The leading numbers are compatibility generations; the trailing part is the
@@ -48,7 +48,7 @@ would misbehave, not merely because behavior changed.
 | --- | --- | --- | --- | --- |
 | Slave application | `1.0.1` | `1` | — | `m<id>v:<bus>:<version>`, `m<id>s`, UPDI dump |
 | Master firmware | `1.1.0.0` | `1` | `1` | MQTT status `version`, `bus_compat`, `mqtt_compat` |
-| Home Assistant integration | `1.0.1` | — | `1` | panel header / connection info, WebSocket `version`, `mqtt_compat` |
+| Home Assistant integration | `1.0.2` | — | `1` | panel header / connection info, WebSocket `version`, `mqtt_compat` |
 | OTA bootloader protocol | `1` | separate | — | PING reply byte 0 |
 
 ### Why the master version has four components
