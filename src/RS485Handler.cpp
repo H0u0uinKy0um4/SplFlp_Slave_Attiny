@@ -1,6 +1,7 @@
 #include <SoftwareSerial.h>
 #include "RS485Handler.h"
 #include "ModuleHandler.h"
+#include "FirmwareVersion.h"
 #include "api/WCharacter.h"
 #include <Arduino.h>
 #include <stdlib.h>
@@ -46,6 +47,16 @@ void sendRS485(String & message) {
 }
 
 
+// Software reset into the bootloader.  The boot flag (EEPROM 255) is armed
+// by requestBootloader() before this is called, so the bootloader stays in
+// update mode after the reset.
+static void softwareReset() {
+  noInterrupts();
+  _PROTECTED_WRITE(RSTCTRL_SWRR, RSTCTRL_SWRE_bm);
+  for (;;) {}                      // reset takes effect within a few cycles
+}
+
+
 static void writeMapPosition(const char* arg) {
     const char* colon = strchr(arg, ':');
     if (colon) {
@@ -65,6 +76,7 @@ static void writeFlapChar(const char* arg) {
 
 void runCommand(char cmd, const char* arg,bool isBroadcast=false) {
   String message;
+  bool enterBootloader = false;
   switch (cmd) {   
     case '-': if(*arg) attiny.moveToFlap(*arg); break;
     case '+': if (isDigit(*arg)) attiny.moveToIndex(atoi(arg)); break;
@@ -103,10 +115,33 @@ void runCommand(char cmd, const char* arg,bool isBroadcast=false) {
       break;
     }
     case 's': {
-      // State query: pos:busy:position_known.  Moves are blocking, so busy is
-      // always 0 by the time the command is parsed.
+      // State query: pos:busy:position_known:compat:fw_version.  Moves are
+      // blocking, so busy is always 0 by the time the command is parsed.
+      // The appended version lets the master show which application is
+      // really running after an OTA without a second bus round-trip; the
+      // compatibility generation is explicit so the master does not have to
+      // parse it out of the version string.
       message = "m" + String(attiny.getId()) + "s:" + String(attiny.getCurrentStepPos()) +
-                ":0:" + String(attiny.isPositionKnown() ? 1 : 0);
+                ":0:" + String(attiny.isPositionKnown() ? 1 : 0) + ':' +
+                String(FW_COMPAT) + ':';
+      attiny.getFirmwareVersion(message);
+      break;
+    }
+    case 'v': {
+      // Version query: m<id>v:<compat>:<fw_version>.  Empty version when the
+      // EEPROM slot is blank (application predating version tracking).
+      message = "m" + String(attiny.getId()) + "v:" + String(FW_COMPAT) + ':';
+      attiny.getFirmwareVersion(message);
+      break;
+    }
+    case 'b': {
+      // Enter the bootloader for an OTA update.  Unicast only: a broadcast
+      // would drop every module into update mode and stall the display.
+      if (!isBroadcast) {
+        bool ok = attiny.requestBootloader();
+        message = "m" + String(attiny.getId()) + "b:" + (ok ? "1" : "0");
+        if (ok) enterBootloader = true;
+      }
       break;
     }
     
@@ -115,6 +150,12 @@ void runCommand(char cmd, const char* arg,bool isBroadcast=false) {
     if (message.length() && !isBroadcast) {
     sendRS485(message);
   }
+    if (enterBootloader) {
+      // sendRS485() blocks until the reply is fully shifted out; give the
+      // master a moment to parse it before the bus goes quiet for the reset.
+      delay(100);
+      softwareReset();
+    }
 }
 
 
