@@ -12,10 +12,17 @@
  * --------
  *  - Internal 20 MHz oscillator (OSCCFG fuse, factory default).
  *  - Bit-banged 9600 8N1 UART on the bus pins:
- *      PA1 = TX (output, idle high)   PA2 = DE (output, low = receive)
- *      PA3 = RX (input)
+ *      PA5 = TX (output, idle high)   PA6 = DE (output, low = receive)
+ *      PA7 = RX (input)
+ *    These are the pins the application's SoftwareSerial uses.  Do not
+ *    "simplify" them to PA1/PA2/PA3: the app names its pins with Arduino
+ *    numbers (RS485_TX 1, RS485_DE 2, RS485_RX 3) and megaTinyCore's txy6
+ *    variant maps Arduino pin 1 -> PA5, 2 -> PA6, 3 -> PA7 (PA1..PA3 are
+ *    Arduino pins 14..16).  A bootloader on PA1..PA3 is completely deaf to
+ *    the bus: the master's PINGs time out with every fuse and EEPROM field
+ *    looking healthy.
  *    USART0 cannot be used: its default pins are PB2/PB3 and its alternate
- *    mapping puts RX on PA2, the DE pin.  SoftwareSerial in the app uses the
+ *    mapping puts TX/RX on PA1/PA2.  SoftwareSerial in the app uses the
  *    same bit-bang approach on the same pins at the same baud rate.
  *
  * Boot policy
@@ -61,9 +68,11 @@
 #define F_CPU 20000000UL
 #endif
 
-#define TX_MASK     (1u << 1)          /* PA1 */
-#define DE_MASK     (1u << 2)          /* PA2 */
-#define RX_MASK     (1u << 3)          /* PA3 */
+/* Arduino pins 1/2/3 of the application, i.e. PA5/PA6/PA7 on ATtiny1616
+   (megaTinyCore txy6 variant).  See the hardware note at the top. */
+#define TX_MASK     (1u << 5)          /* PA5 (Arduino 1) */
+#define DE_MASK     (1u << 6)          /* PA6 (Arduino 2) */
+#define RX_MASK     (1u << 7)          /* PA7 (Arduino 3) */
 
 #define BIT_CYCLES  (F_CPU / OTA_BAUD_RATE)   /* 2083 at 20 MHz / 9600 */
 

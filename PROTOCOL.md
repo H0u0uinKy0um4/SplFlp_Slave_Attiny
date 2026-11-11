@@ -178,7 +178,8 @@ disassembly: the instruction bytes must be `0C 94 00 04`.
 ### Framing
 
 All OTA traffic uses 9600 baud 8N1 on the same bus pins as the application
-(PA1 TX, PA3 RX, PA2 DE). A frame is:
+(PA5 TX, PA7 RX, PA6 DE; the app names them Arduino pins 1/3/2, which
+megaTinyCore maps to PA5/PA7/PA6 — not PA1..PA3). A frame is:
 
 ```
 [0xAA][addr][cmd][len][payload ... ][crc_hi][crc_lo]
