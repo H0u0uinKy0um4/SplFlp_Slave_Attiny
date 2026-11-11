@@ -238,8 +238,12 @@ into one Intel HEX (prog.py chip-erases on every `-a write`) and writes the
 fuses *before* the erase: OSCCFG = 0x02 (20 MHz), SYSCFG0 = 0xC5 (factory
 0xC4 plus EESAVE, so EEPROM survives chip erase; UPDI pin config
 preserved), BOOTEND = 0x08. Module id and calibration EEPROM are retained.
-Later application updates never use UPDI again; they go over RS485 as
-above.
+After the flash write it clears the boot flag (EEPROM 255 = 0x00) and resets
+the module, then verifies the byte. That step matters because EESAVE keeps an
+armed flag across the chip erase: without it a module that was left in update
+mode would install cleanly and still never start the application. Pass
+`--keep-boot-flag` to skip the clear. Later application updates never use
+UPDI again; they go over RS485 as above.
 
 `bootloader/tools/flash_mqtt.py` drives those later updates from the bench:
 it validates the `ATtiny1616_OTA` build's `firmware.hex` (reusing
@@ -256,7 +260,7 @@ four states, and all of them are readable over UPDI without writing anything:
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| boot flag at EEPROM 255 armed (`0xB0`) | the module stayed in update mode after a cancelled session or a power cut | `{"action":"reset","module":N}` (the bootloader handles RESET and clears the flag), or a full RS485 flash |
+| boot flag at EEPROM 255 armed (`0xB0`) | the module stayed in update mode after a cancelled session or a power cut | `{"action":"reset","module":N}` (the bootloader handles RESET and clears the flag), or `python3 bootloader/tools/dump_eeprom.py --clear-boot-flag` (writes the byte and resets the chip), or a full RS485 flash |
 | `0x0800` reads `FF FF` | no application installed | run `flash_mqtt.py`, or re-run `install.py` |
 | BOOTEND ≠ `0x08` | app vectors are not relocated; the app dies on its first interrupt | write fuses only: `prog.py --fuses 2:0x02 5:0xc5 8:0x08` (no erase) |
 | all of the above fine | the app runs but will not home/answer: auto-home off, another module id, or a wiped EEPROM | compare `m<id>d` with the dumped id |

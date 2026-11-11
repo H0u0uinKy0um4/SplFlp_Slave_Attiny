@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only diagnostic dump of an OTA module over UPDI.
+"""Diagnostic dump (and boot-flag recovery) of an OTA module over UPDI.
 
 When a module "is silent" (no homing, no answer to m<id>d) the cause is one of
 a small number of states, and they are all visible without guessing:
@@ -13,8 +13,9 @@ a small number of states, and they are all visible without guessing:
     (auto-home disabled, unexpected module id, wiped EEPROM).
 
 This tool prints all of that: fuses, the first bytes of the application at
-0x0800, and the EEPROM fields the boot policy and the app depend on. It never
-writes anything.
+0x0800, and the EEPROM fields the boot policy and the app depend on. It is
+read-only unless ``--clear-boot-flag`` is given, which writes a single
+EEPROM byte (255 = 0x00) to recover a module stuck in update mode.
 
 Requires megaTinyCore's bundled pymcuprog (the same package prog.py uses) and
 a UPDI adapter on the module.
@@ -24,6 +25,8 @@ Usage:
   python3 dump_eeprom.py --port /dev/ttyUSB1
   python3 dump_eeprom.py --raw            # hexdump all 256 EEPROM bytes
   python3 dump_eeprom.py --json           # machine-readable
+  python3 dump_eeprom.py --clear-boot-flag  # recover a module stuck in update mode
+  python3 dump_eeprom.py --clear-boot-flag --no-reset  # just clear the flag
 """
 
 from __future__ import annotations
@@ -156,7 +159,8 @@ def _flag_armed_text(state: dict, layout: dict[str, int]) -> str:
             f"the application never runs. It only speaks the binary protocol, so it "
             f"does not home and does not answer ASCII. Clear it with "
             f'{{"action":"reset","module":<id>}} on <prefix>/command/firmware '
-            f"(the bootloader handles RESET and clears the flag).")
+            f"(the bootloader handles RESET and clears the flag), or over UPDI with "
+            f"this tool's --clear-boot-flag when the bootloader does not answer.")
 
 
 def _handover_hint() -> tuple[str, str]:
@@ -333,6 +337,12 @@ def main() -> int:
     parser.add_argument("--raw", action="store_true", help="hexdump the whole EEPROM")
     parser.add_argument("--debug", action="store_true",
                         help="decode the OTA_DEBUG_MARKERS breadcrumbs at EEPROM 244-254")
+    parser.add_argument("--clear-boot-flag", action="store_true",
+                        help="write 0x00 to the boot flag at EEPROM 255 after the dump and "
+                             "reset the module, recovering it from update mode")
+    parser.add_argument("--no-reset", action="store_true",
+                        help="with --clear-boot-flag, leave the module running (power-cycle "
+                             "it yourself to boot the application)")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     parser.add_argument("-v", "--verbose", action="store_true", help="pymcuprog INFO logging")
     args = parser.parse_args()
@@ -363,6 +373,8 @@ def main() -> int:
 
     backend = pymcu.Backend()
     session = False
+    flag_cleared = False
+    reset_done = False
     try:
         connection = pymcu._setup_tool_connection(
             argparse.Namespace(tool="uart", uart=args.port))
@@ -383,6 +395,31 @@ def main() -> int:
         app_head = bytes(backend.read_memory(
             pymcu.MemoryNames.FLASH, APP_START, 4, None)[0].data)
         eeprom = bytes(backend.read_memory(pymcu.MemoryNames.EEPROM, 0, 0, None)[0].data)
+
+        if args.clear_boot_flag:
+            # Recovery for a module that is sitting in update mode: clearing
+            # the flag makes the bootloader run the (intact) application on
+            # the next reset instead of waiting for binary frames.  This is
+            # the same byte the bootloader's CMD_RESET writes.
+            backend.write_memory(bytearray([0x00]), pymcu.MemoryNames.EEPROM,
+                                 layout["flag_addr"])
+            check = bytes(backend.read_memory(
+                pymcu.MemoryNames.EEPROM, layout["flag_addr"], 1, None)[0].data)
+            if check != b"\x00":
+                raise RuntimeError(
+                    "the boot flag did not take the new value "
+                    f"({'empty read' if not check else '0x%02X' % check[0]})")
+            flag_cleared = True
+            if not args.no_reset:
+                # The running bootloader latched "staying" when it read the
+                # flag, so clearing the byte alone is not enough: reset the
+                # chip so it re-reads the flag and jumps to the application.
+                try:
+                    pymcu._action_reset(backend)
+                    reset_done = True
+                except Exception as exc:  # noqa: BLE001 - a power-cycle also works
+                    print(f"warning: the module did not reset over UPDI ({exc}); "
+                          "power-cycle it to boot the application", file=sys.stderr)
     except Exception as exc:  # noqa: BLE001 - report anything the tool raises
         print(f"error: {exc}", file=sys.stderr)
         print("  check the UPDI wiring, the port and that the module is powered", file=sys.stderr)
@@ -411,7 +448,9 @@ def main() -> int:
     if args.json:
         print(json.dumps({k: v for k, v in state.items() if k != "verdicts"}
                          | {"verdicts": [{"level": lvl, "text": txt}
-                                         for lvl, txt in state["verdicts"]]},
+                                         for lvl, txt in state["verdicts"]]}
+                         | {"boot_flag_cleared": flag_cleared,
+                            "reset_after_clear": reset_done},
                          indent=2))
     else:
         print(f"UPDI {args.port} @ {args.baud}  ({DEVICE})\n")
@@ -429,6 +468,17 @@ def main() -> int:
         if args.raw:
             print("\nEEPROM:")
             print(hexdump(eeprom))
+        if args.clear_boot_flag:
+            if flag_cleared:
+                if reset_done:
+                    print("\nBoot flag cleared (EEPROM 255 = 0x00) and the module was "
+                          "reset. The bootloader now boots the application, which may "
+                          "home for up to ~20 s before it answers RS485.")
+                else:
+                    print("\nBoot flag cleared (EEPROM 255 = 0x00). Power-cycle the "
+                          "module so the bootloader jumps to the application.")
+            else:
+                print("\nBoot flag was NOT cleared.")
 
     return 0
 

@@ -13,6 +13,12 @@ Builds nothing itself; installs three things in a single UPDI session:
   2. The bootloader image  (bootloader/.pio/build/ATtiny1616_Boot/firmware.hex)
   3. The OTA application image  (.pio/build/ATtiny1616_OTA/firmware.hex)
 
+After the flash write it clears the OTA boot flag (EEPROM 255 = 0x00) and
+resets the module, so the freshly installed application starts instead of
+the bootloader staying in update mode.  The flag survives a normal chip
+erase because SYSCFG0 has EESAVE=1, which is why leaving it set would strand
+a reinstalled module.  Pass --keep-boot-flag to skip this step.
+
 Why this cannot brick a module
 ------------------------------
   * prog.py (megaTinyCore's SerialUPDI tool) writes fuses BEFORE its
@@ -63,6 +69,14 @@ FUSES = {
     5: 0xC5,   # SYSCFG0: factory 0xC4 | EESAVE (UPDI pin config preserved)
     8: 0x08,   # BOOTEND: 2 KB boot section
 }
+
+# EEPROM 255 (see bootloader/include/protocol.h OTA_EEPROM_BOOT_FLAG_ADDR).
+# It is cleared after every install: EESAVE=1 preserves EEPROM through the
+# installer's chip erase, so an armed flag from an earlier OTA session would
+# otherwise survive the reinstall and the freshly installed app would never
+# start (the bootloader would stay in update mode).
+EEPROM_BOOT_FLAG_ADDR = 255
+EEPROM_BOOT_FLAG_CLEAR = 0x00
 
 DEVICE = "attiny1616"
 
@@ -205,6 +219,92 @@ def find_prog_py(explicit: str | None) -> Path:
     return path
 
 
+# --- Post-install boot-flag clear ---------------------------------------------
+
+def clear_boot_flag(prog_path: Path, port: str, baud: str) -> bool:
+    """Clear the OTA boot flag after the flash write and reset the module.
+
+    prog.py only writes flash.  Because SYSCFG0 has EESAVE=1, its chip erase
+    preserves EEPROM, so an armed boot flag (0xB0 at EEPROM 255) from an
+    earlier OTA session survives the reinstall and the bootloader never jumps
+    to the new application.  Clear it here, verify it, then reset so the
+    bootloader re-reads it and starts the app.
+
+    The flag sits alone in its 32-byte EEPROM page (the application's last
+    EEPROM byte is 204), so writing the single byte is safe.  Returns False
+    (and prints a warning) when the clear cannot be verified; the flash
+    install itself has already succeeded at that point.
+    """
+    libs = prog_path.parent / "libs"
+    if not libs.is_dir():
+        print(f"warning: {libs} not found; cannot clear the OTA boot flag over UPDI",
+              file=sys.stderr)
+        return False
+
+    sys.path.insert(0, str(libs))
+    try:
+        import logging
+
+        import pymcuprog.pymcuprog_main as pymcu
+        from pymcuprog.pymcuprog import setup_logging
+
+        setup_logging(user_requested_level=logging.ERROR)
+    except ImportError as exc:
+        print(f"warning: cannot import the bundled pymcuprog ({exc}); cannot clear "
+              "the OTA boot flag over UPDI", file=sys.stderr)
+        return False
+
+    backend = pymcu.Backend()
+    session = False
+    try:
+        connection = pymcu._setup_tool_connection(
+            argparse.Namespace(tool="uart", uart=port))
+        backend.connect_to_tool(connection)
+        device = pymcu._select_target_device(
+            backend, argparse.Namespace(device=DEVICE, tool="uart"))
+        status = pymcu._start_session(backend, device, argparse.Namespace(
+            interface="updi", clk=baud, high_voltage=False,
+            user_row_locked_device=False, chip_erase_locked_device=False,
+            packpath=False))
+        if status != pymcu.STATUS_SUCCESS:
+            raise RuntimeError(f"cannot start a UPDI session on {port}")
+        session = True
+        pymcu._action_ping(backend)
+
+        backend.write_memory(bytearray([EEPROM_BOOT_FLAG_CLEAR]),
+                             pymcu.MemoryNames.EEPROM, EEPROM_BOOT_FLAG_ADDR)
+        check = bytes(backend.read_memory(
+            pymcu.MemoryNames.EEPROM, EEPROM_BOOT_FLAG_ADDR, 1, None)[0].data)
+        if check != bytes([EEPROM_BOOT_FLAG_CLEAR]):
+            raise RuntimeError(
+                "the boot flag did not take the cleared value "
+                f"({'empty read' if not check else '0x%02X' % check[0]})")
+
+        try:
+            pymcu._action_reset(backend)
+            print("Boot flag cleared; module reset into the application.")
+        except Exception as exc:  # noqa: BLE001 - a power-cycle also works
+            print(f"warning: the module did not reset over UPDI ({exc}); "
+                  "power-cycle it to boot the application", file=sys.stderr)
+        return True
+    except Exception as exc:  # noqa: BLE001 - the flash install already succeeded
+        print(f"warning: could not clear the OTA boot flag over UPDI ({exc}).\n"
+              "  The application is installed but the bootloader may stay in update "
+              "mode.\n  Clear it with: python3 bootloader/tools/dump_eeprom.py "
+              "--clear-boot-flag", file=sys.stderr)
+        return False
+    finally:
+        if session:
+            try:
+                backend.end_session()
+            except Exception:  # noqa: BLE001 - best effort on the way out
+                pass
+        try:
+            backend.disconnect_from_tool()
+        except Exception:  # noqa: BLE001 - best effort on the way out
+            pass
+
+
 # --- Main ----------------------------------------------------------------------
 
 def main() -> int:
@@ -219,6 +319,9 @@ def main() -> int:
     parser.add_argument("--merged-hex", type=Path, default=DEFAULT_MERGED_HEX,
                         help="where to write the merged image (default: %(default)s)")
     parser.add_argument("--prog", default=None, help="path to megaTinyCore's prog.py")
+    parser.add_argument("--keep-boot-flag", action="store_true",
+                        help="do not clear the OTA boot flag after installing (default: "
+                             "clear it and reset into the application)")
     parser.add_argument("--yes", action="store_true", help="do not ask for confirmation")
     parser.add_argument("--dry-run", action="store_true",
                         help="parse, validate and merge only; do not touch hardware")
@@ -275,6 +378,9 @@ def main() -> int:
         if args.dry_run:
             print("\nDry run: nothing was written. Would run:")
             print("  " + " ".join(cmd))
+            if not args.keep_boot_flag:
+                print("Then clear the OTA boot flag (EEPROM 255 = 0x00) over UPDI "
+                      "and reset into the application.")
             return 0
 
         if not args.yes:
@@ -292,6 +398,11 @@ def main() -> int:
                 "prog.py failed (exit code {}). If it failed before the flash write, "
                 "the chip may be erased but EEPROM is intact and UPDI works: "
                 "fix the cause and re-run this script.".format(result.returncode))
+
+        if not args.keep_boot_flag:
+            # EESAVE=1 preserved an armed flag from an earlier OTA session.
+            # Clear it (and reset) so the newly installed app actually runs.
+            clear_boot_flag(prog_path, args.port, args.baud)
 
         print(
             "\nInstalled. On the next reset the bootloader starts the application "
