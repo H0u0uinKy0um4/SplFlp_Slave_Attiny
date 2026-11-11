@@ -324,6 +324,14 @@ static void send_response(uint8_t cmd, const uint8_t *payload, uint8_t len)
 
     uint16_t crc = ota_crc16(buf, (uint8_t)(3 + len));
 
+    /* Bus turnaround: while the master transmits it also drains its own
+       half-duplex echo and can keep its transceiver's driver enabled for up
+       to ~5 ms after the last stop bit (longer frames overflow its RX ring
+       and hit that timeout).  The application waits 10 ms before every
+       ASCII reply for the same reason; without this the first byte of our
+       response can collide with the master's still-enabled driver. */
+    __builtin_avr_delay_cycles(F_CPU / 100);    /* 10 ms */
+
     VPORTA_OUT |= DE_MASK;                      /* driver on */
     __builtin_avr_delay_cycles(2000);            /* settle, ~100 us */
     uart_tx_byte(OTA_SYNC);
