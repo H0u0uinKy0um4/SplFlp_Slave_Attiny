@@ -54,6 +54,9 @@ LAYOUT_DEFAULTS: dict[str, int] = {
     "auto_home": 6,
     "map_chars": 140,
     "map_format": 204,
+    "fw_version": 205,
+    "fw_version_slot": 8,
+    "fw_compat": 1,
     "init_value": 0x5D,
     "format_value": 0x02,
     "flag_addr": 255,
@@ -79,6 +82,7 @@ def load_layout() -> tuple[dict[str, int], list[str]]:
 
     handler = REPO_ROOT / "include" / "ModuleHandler.h"
     protocol = REPO_ROOT / "include" / "OTAProtocol.h"
+    version_header = REPO_ROOT / "include" / "FirmwareVersion.h"
 
     try:
         text = handler.read_text(encoding="utf-8")
@@ -93,6 +97,8 @@ def load_layout() -> tuple[dict[str, int], list[str]]:
             "auto_home": r"ADDR_AUTO_HOME\s*=\s*(\w+)",
             "map_chars": r"ADDR_MAP_CHARS\s*=\s*(\w+)",
             "map_format": r"ADDR_FORMAT\s*=\s*(\w+)",
+            "fw_version": r"ADDR_FW_VERSION\s*=\s*(\w+)",
+            "fw_version_slot": r"FW_VERSION_SLOT\s*=\s*(\w+)",
             "init_value": r"INIT_VALUE\s*=\s*(\w+)",
             "format_value": r"FORMAT_VALUE\s*=\s*(\w+)",
         }
@@ -116,6 +122,22 @@ def load_layout() -> tuple[dict[str, int], list[str]]:
             else:
                 layout[key] = value
 
+    try:
+        text = version_header.read_text(encoding="utf-8")
+    except OSError as exc:
+        warnings.append(
+            f"cannot read {version_header} ({exc}); assuming compat {layout['fw_compat']}"
+        )
+    else:
+        value = _numeric(r"FW_COMPAT\s+(\w+)", text)
+        if value is None:
+            warnings.append(
+                f"{version_header.name}: FW_COMPAT not found, "
+                f"assuming {layout['fw_compat']}"
+            )
+        else:
+            layout["fw_compat"] = value
+
     return layout, warnings
 
 
@@ -128,6 +150,20 @@ def decode(eeprom: bytes, fuses: bytes, app_head: bytes, layout: dict[str, int])
     bootend = fuses[8] if len(fuses) > 8 else None
     flag = eeprom[layout["flag_addr"]]
     head_word = app_head[0] | (app_head[1] << 8) if len(app_head) >= 2 else 0xFFFF
+
+    version = ""
+    for byte in eeprom[layout["fw_version"]:
+                        layout["fw_version"] + layout["fw_version_slot"]]:
+        if byte in (0x00, 0xFF) or not 32 <= byte < 127:
+            break
+        version += chr(byte)
+
+    version_compat = 0
+    if version:
+        try:
+            version_compat = int(version.split(".", 1)[0], 10)
+        except ValueError:
+            version_compat = 0
 
     state = {
         "fuses": fuses.hex(" ").upper(),
@@ -145,6 +181,8 @@ def decode(eeprom: bytes, fuses: bytes, app_head: bytes, layout: dict[str, int])
         "home_offset": u16(layout["home_offset"]),
         "total_steps": u16(layout["total_steps"]),
         "map_format": eeprom[layout["map_format"]],
+        "fw_version": version,
+        "fw_compat": version_compat,
         "boot_flag": flag,
         "boot_flag_armed": flag == layout["flag_value"],
         "eeprom_size": len(eeprom),
@@ -243,6 +281,19 @@ def _verdicts(state: dict, layout: dict[str, int]) -> list[tuple[str, str]]:
         f"module id {state['module_id']}, auto-home {state['auto_home']}, "
         f"home offset {state['home_offset']}, steps/rev {state['total_steps']} "
         f"- query it with m{state['module_id']}d"))
+    if not state["fw_version"]:
+        out.append((
+            "info",
+            f"no application version in EEPROM {layout['fw_version']}.."
+            f"{layout['fw_version'] + layout['fw_version_slot'] - 1}: the app "
+            f"predates version tracking or has not booted since the install; "
+            f"compare the flash image CRC instead."))
+    elif state["fw_compat"] != layout["fw_compat"]:
+        out.append((
+            "warn",
+            f"application compat {state['fw_compat']} does not match this "
+            f"tree's compat {layout['fw_compat']}: the app, master and Home "
+            f"Assistant may not speak the same protocol generation."))
     return out
 
 
@@ -316,6 +367,10 @@ def report(state: dict, layout: dict[str, int]) -> str:
         f"({state['bootend_bytes']} bytes of boot section)",
         f"App     : @{APP_START:#06x} = {state['app_head']}   "
         f"({'present' if state['app_present'] else 'BLANK'})",
+        f"Version : "
+        f"{state['fw_version'] or 'unknown (blank EEPROM slot / old firmware)'}"
+        + (f"   compat={state['fw_compat']} (tree expects {layout['fw_compat']})"
+           if state['fw_version'] else f"   tree expects compat {layout['fw_compat']}"),
         f"EEPROM  : init=0x{state['eeprom_init']:02X}  id={state['module_id']}  "
         f"auto-home={state['auto_home']}  home-offset={state['home_offset']}  "
         f"steps/rev={state['total_steps']}  map=0x{state['map_format']:02X}  "

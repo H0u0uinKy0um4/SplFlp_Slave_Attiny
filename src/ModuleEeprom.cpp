@@ -1,7 +1,9 @@
 #include <EEPROM.h>
 #include "ModuleHandler.h"
 #include "OTAProtocol.h"
+#include "FirmwareVersion.h"
 #include <stdint.h>
+#include <string.h>
 
 // Set the boot flag the bootloader checks (EEPROM 255, alone in its 32-byte
 // EEPROM page, above the app's last used byte at 204).  The next reset stays
@@ -51,6 +53,31 @@ void SplitFlapModule::getDrum(String & message)const
 {
   for (uint8_t i = 0; i < DRUM_SIZE; i++) {
       message += (char)EEPROM.read(ADDR_MAP_CHARS + i);
+  }
+}
+
+// The version is stored as text so it is readable both over RS485 and in a
+// raw UPDI EEPROM dump.  A blank/erased slot (0xFF) yields an empty string:
+// that is an application predating version tracking, not a version of "".
+void SplitFlapModule::getFirmwareVersion(String & message)const
+{
+  for (uint8_t i = 0; i < FW_VERSION_SLOT; i++) {
+    char c = (char)EEPROM.read(ADDR_FW_VERSION + i);
+    if (c == '\0' || c == (char)0xFF) break;
+    message += c;
+  }
+}
+
+// Called once per boot.  EEPROM.update() skips identical bytes, so a normal
+// boot performs no writes; the slot is rewritten only after an OTA that
+// changed FW_VERSION.  The rest of the slot is zero-padded so a shorter
+// version cannot leave characters from the previous one behind.
+void SplitFlapModule::saveFirmwareVersion()
+{
+  const size_t length = strlen(FW_VERSION);
+  for (uint8_t i = 0; i < FW_VERSION_SLOT; i++) {
+    char c = i < length ? FW_VERSION[i] : '\0';
+    EEPROM.update(ADDR_FW_VERSION + i, (uint8_t)c);
   }
 }
 
