@@ -165,6 +165,20 @@ The app also overrides that hook (`src/ResetFlags.cpp`) with the same
 bookkeeping minus the forced reset, so a hand-over that does clear the flags
 cannot produce this loop.
 
+### Software reset is CCP-protected
+
+`RSTCTRL.SWRR` sits behind the I/O-register Configuration Change Protection
+(signature `0xD8`). A plain store is *silently ignored*: the bootloader
+answers the final ACK and then spins forever in its `for(;;)` after
+FINISH/RESET, so the module goes mute until the next power cycle even though
+the flash CRC verified, the boot flag is clear and the app image is intact.
+Every software reset must use
+`_PROTECTED_WRITE(RSTCTRL_SWRR, RSTCTRL_SWRE_bm)` — the app's
+`softwareReset()` and megaTinyCore's `init_reset_flags()` already do. With
+the fix the code at the reset site is `ldi r24, 0xD8` / `out 0x34, r24` /
+`sts 0x0041, r25`; a lone `sts 0x0041` without the preceding CCP write is the
+bug.
+
 The hand-over `jmp` must name **`0x0800`, not `0x0400`**. GNU as takes `jmp`
 operands as *byte* addresses and encodes the word address itself, so writing
 the word address in the source (`APP_START_BYTE / 2`) produces `jmp 0x0400`
@@ -266,6 +280,7 @@ four states, and all of them are readable over UPDI without writing anything:
 | BOOTEND ≠ `0x08` | app vectors are not relocated; the app dies on its first interrupt | write fuses only: `prog.py --fuses 2:0x02 5:0xc5 8:0x08` (no erase) |
 | all of the above fine | the app runs but will not home/answer: auto-home off, another module id, or a wiped EEPROM | compare `m<id>d` with the dumped id |
 | dump says everything is healthy and the module is still silent | reset loop: the app's `.init3` found no reset flags and reset itself before `setup()` (see "Application hand-over") | reinstall with the current bootloader (`start_app()` must not clear `RSTCTRL.RSTFR`) and app (`src/ResetFlags.cpp`) |
+| FINISH/RESET ACK received, then the module goes mute until a power cycle; boot flag clear, app CRC matches | the bootloader wrote `RSTCTRL.SWRR` without CCP, so the software reset never happened and it spins after the ACK (see "Software reset is CCP-protected") | `reset_now()` must use `_PROTECTED_WRITE(RSTCTRL_SWRR, RSTCTRL_SWRE_bm)`; reinstall the bootloader |
 | bootloader marker says it jumped, app markers never appear, occasional EEPROM bytes change on their own | the hand-over jumped to `0x0400` instead of `0x0800`: GAS `jmp` operands are byte addresses, so `APP_START_BYTE / 2` lands inside the bootloader | `start_app()` must use `jmp APP_START_BYTE`; disassembly bytes at the jump must be `0C 94 00 04` |
 
 `bootloader/tools/dump_eeprom.py` prints fuses, the app header at `0x0800`

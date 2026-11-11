@@ -448,7 +448,13 @@ static void reset_now(void)
     while (WDT_STATUS & WDT_SYNCBUSY_bm)
         ;
     _PROTECTED_WRITE(WDT_CTRLA, WDT_PERIOD_OFF_gc);
-    RSTCTRL_SWRR = RSTCTRL_SWRE_bm;
+    /* RSTCTRL.SWRR is CCP-protected (IO register protection, signature
+       0xD8).  A plain store to it is silently ignored, which leaves the
+       bootloader spinning in the loop below after FINISH/RESET: the
+       master sees the ACK but the app never runs (module silent, no
+       homing).  The app's softwareReset() and megaTinyCore's own
+       init_reset_flags() use _PROTECTED_WRITE for the same reason. */
+    _PROTECTED_WRITE(RSTCTRL_SWRR, RSTCTRL_SWRE_bm);
     for (;;)
         ;                                      /* reset takes effect now */
 }
