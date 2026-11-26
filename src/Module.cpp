@@ -8,6 +8,7 @@
 
 
 SplitFlapModule::SplitFlapModule()
+  : motion_(*this, *this)
 {
     debugMark(DBG_STAGE_CTOR);
     if (checkFirstBoot()) loadOnBoot();

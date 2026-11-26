@@ -28,9 +28,9 @@ Each repository also has a **RELEASE** inside its generations. The published
 version is composed from the compat numbers that apply to that repository:
 
 ```
-slave    <bus>.<release>             1.0.1      bus 1, release 0.1
-master   <bus>.<mqtt>.<release>      1.1.0.0    bus 1, mqtt 1, release 0.0
-HA       <mqtt>.<release>            1.0.2      mqtt 1, release 0.2
+slave    <bus>.<release>             1.0.2      bus 1, release 0.2
+master   <bus>.<mqtt>.<release>      1.1.0.1    bus 1, mqtt 1, release 0.1
+HA       <mqtt>.<release>            1.2.20     mqtt 1, release 2.20
 ```
 
 The leading numbers are compatibility generations; the trailing part is the
@@ -46,19 +46,19 @@ would misbehave, not merely because behavior changed.
 
 | Component | Version | BUS_COMPAT | MQTT_COMPAT | Where it is reported |
 | --- | --- | --- | --- | --- |
-| Slave application | `1.0.1` | `1` | — | `m<id>v:<bus>:<version>`, `m<id>s`, UPDI dump |
-| Master firmware | `1.1.0.0` | `1` | `1` | MQTT status `version`, `bus_compat`, `mqtt_compat` |
-| Home Assistant integration | `1.0.2` | — | `1` | panel header / connection info, WebSocket `version`, `mqtt_compat` |
+| Slave application | `1.0.2` | `1` | — | `m<id>v:<bus>:<version>`, `m<id>s`, UPDI dump |
+| Master firmware | `1.1.0.1` | `1` | `1` | MQTT status `version`, `bus_compat`, `mqtt_compat` |
+| Home Assistant integration | `1.2.20` | — | `1` | panel header / connection info, WebSocket `version`, `mqtt_compat` |
 | OTA bootloader protocol | `1` | separate | — | PING reply byte 0 |
 
 ### Why the master version has four components
 
-`1.1.0.0` is not a mistake:
+`1.1.0.1` is not a mistake:
 
 ```
 1 . 1 . 0 . 0
 │   │   └─┬─┘
-│   │     └── master release 0.0
+│   │     └── master release 0.1
 │   └──────── MQTT_COMPAT 1 (master <-> Home Assistant)
 └──────────── BUS_COMPAT 1 (slave <-> master)
 ```
@@ -106,7 +106,8 @@ These are additive and bump `RELEASE` only:
 - a new command or a new optional status field;
 - appending fields to an existing reply (older peers ignore the tail);
 - bug fixes, performance work, UI changes;
-- changing default settings or calibration values.
+- changing default settings or calibration values;
+- rejecting wildcard arguments that were never valid inputs, such as `o*`, `t*`, `g*`, `i*` and `a*` in slave 1.0.2 (those forms wrote corrupted values; see `PROTOCOL.md`).
 
 When in doubt, ask: "can the previous release still work with the new peer?"
 If yes, it is a release. If no, bump the compatibility number for that domain.
@@ -122,8 +123,8 @@ from a build date.
 ### Slave
 
 ```text
-m3v   -> m3v:1:1.0.1        bus compat 1, application 1.0.1
-m3s   -> m3s:<pos>:0:1:1:1.0.1
+m3v   -> m3v:1:1.0.2        bus compat 1, application 1.0.2
+m3s   -> m3s:<pos>:0:1:1:1.0.2
 ```
 
 An old application returns an empty version. The master keeps the module
@@ -133,7 +134,7 @@ The UPDI dump reads the persisted copy independently of the bus:
 
 ```bash
 python3 bootloader/tools/dump_eeprom.py
-# Version : 1.0.1   bus compat=1 (tree expects 1)
+# Version : 1.0.2   bus compat=1 (tree expects 1)
 ```
 
 ### Master
@@ -144,13 +145,13 @@ retained status payload:
 ```json
 {
   "state": "online",
-  "version": "1.1.0.0",
+  "version": "1.1.0.1",
   "bus_compat": 1,
   "mqtt_compat": 1,
   "modules": [
     {
       "id": 3,
-      "fw_version": "1.0.1",
+      "fw_version": "1.0.2",
       "fw_bus_compat": 1,
       "fw_bus_compatible": true
     }
@@ -209,6 +210,11 @@ Bump only the domain that broke:
 | MQTT JSON schema | `MASTER_MQTT_COMPAT`, `MQTT_COMPAT` |
 | Both | all four |
 
+On the slave, `FW_BUS_COMPAT` is generated from `protocol.fw_bus_compat` in
+`layout/persisted_layout.json`; change the record and run
+`python3 tools/generate_layout.py` before building. `FW_RELEASE` stays in
+`include/FirmwareVersion.h`.
+
 Then:
 
 1. Reset the affected `RELEASE` values as appropriate (usually `0.0`).
@@ -232,7 +238,7 @@ running device. Tags are the historical index:
 
 ```bash
 # one per repository, same format
-git tag -a v1.0.1 -m "slave 1.0.1, bus compat 1"
+git tag -a v1.0.2 -m "slave 1.0.2, bus compat 1"
 
 # when a shared generation changes, tag the coordinated point
 git tag -a bus-compat-2 -m "slave <-> master compatibility generation 2"

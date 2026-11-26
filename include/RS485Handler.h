@@ -8,12 +8,10 @@ const int RS485_TX = 1;   // Transmit data to bus  (SoftwareSerial TX)
 const int RS485_DE = 2;   // Driver Enable: HIGH = transmit, LOW = receive
 
 extern SoftwareSerial rs485;
-extern SplitFlapModule attiny;
 
 constexpr unsigned long CMD_TIMEOUT_MS = 50;
 
-void setupRS485();
-void sendRS485(String & message);
-void runCommand(char cmd, const char* arg, bool isBroadcast = false);
+// Transport adapter setup: the command module and its other adapters are
+// owned here; the caller supplies the module it should drive.
+void setupRS485(SplitFlapModule& module);
 void loadCommand();
-void processLine(const char* line);

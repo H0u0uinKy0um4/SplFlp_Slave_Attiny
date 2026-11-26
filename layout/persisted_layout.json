@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "description": "Canonical EEPROM/flash layout shared by the application, bootloader and host tools. Regenerate the C headers with tools/generate_layout.py.",
+  "eeprom": {
+    "size": 256,
+    "init_addr": 0,
+    "init_value": 93,
+    "home_offset_addr": 1,
+    "total_steps_addr": 3,
+    "module_id_addr": 5,
+    "auto_home_addr": 6,
+    "map_start_addr": 12,
+    "map_chars_addr": 140,
+    "map_format_addr": 204,
+    "map_format_value": 2,
+    "fw_version_addr": 205,
+    "fw_version_slot": 8,
+    "debug_markers_start": 244,
+    "debug_markers_end": 254,
+    "boot_flag_addr": 255,
+    "boot_flag_value": 176,
+    "boot_flag_clear_value": 0
+  },
+  "flash": {
+    "bootloader_pages": 8,
+    "bootloader_size": 2048,
+    "app_start": 2048,
+    "flash_page_size": 64,
+    "flash_total_size": 16384,
+    "flash_end": 16384,
+    "app_max_size": 14336,
+    "app_max_pages": 224
+  },
+  "protocol": {
+    "fw_bus_compat": 1,
+    "bootloader_version": 1
+  }
+}

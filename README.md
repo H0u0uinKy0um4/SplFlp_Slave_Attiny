@@ -43,15 +43,18 @@ python3 bootloader/tools/dump_eeprom.py
 | `PROTOCOL.md` | **Canonical** RS485 + OTA wire contract and recovery diagnostics |
 | `docs/OTA_BUILD.md` | Day-to-day build, upload and "did it take?" recipe |
 | `docs/VERSIONING.md` | **Canonical** cross-repo compatibility/release model |
+| `GLOSSARY.md` | Domain terms used by the firmware and its tools |
+| `layout/persisted_layout.json` | **Canonical** EEPROM/flash layout record |
+| `.github/workflows/release.yml` | Publishes the rolling `dev` and stable tag release assets |
 | `bootloader/README.md` | Reusable bootloader design notes and integration checklist |
 
 ## Version
 
 ```c
 // include/FirmwareVersion.h
-#define FW_BUS_COMPAT 1      // slave <-> master compatibility generation
-#define FW_RELEASE "0.1"     // this firmware's release inside it
-#define FW_VERSION "1.0.1"   // composed, persisted in EEPROM 205..212
+#define FW_BUS_COMPAT SF_FW_BUS_COMPAT  // from layout/persisted_layout.json
+#define FW_RELEASE "0.2"                // this firmware's release inside it
+#define FW_VERSION "1.0.2"              // composed, persisted in EEPROM 205..212
 ```
 
 `m<id>v` reports `m<id>v:<bus_compat>:<version>`; `m<id>s` ends with the same

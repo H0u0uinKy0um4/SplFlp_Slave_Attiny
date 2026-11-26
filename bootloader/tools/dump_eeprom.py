@@ -33,112 +33,21 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS_DIR))
 import install  # noqa: E402  (path is prepared above; same directory)
+from layout import APP_START, LAYOUT  # noqa: E402  (canonical record)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
 DEVICE = "attiny1616"
 
-# Fallbacks only: the real values are read out of the headers below so the
-# tool cannot silently drift from the firmware it is inspecting.
-LAYOUT_DEFAULTS: dict[str, int] = {
-    "init": 0,
-    "home_offset": 1,
-    "total_steps": 3,
-    "module_id": 5,
-    "auto_home": 6,
-    "map_chars": 140,
-    "map_format": 204,
-    "fw_version": 205,
-    "fw_version_slot": 8,
-    "fw_bus_compat": 1,
-    "init_value": 0x5D,
-    "format_value": 0x02,
-    "flag_addr": 255,
-    "flag_value": 0xB0,
-}
-
-APP_START = 0x0800
-
-
-# --- Shared constants, read from the firmware headers ---------------------------
-
-def _numeric(pattern: str, text: str) -> int | None:
-    match = re.search(pattern, text)
-    if not match:
-        return None
-    return int(match.group(1), 0)
-
+# --- Shared constants, read from the canonical persisted-layout record ----------
 
 def load_layout() -> tuple[dict[str, int], list[str]]:
-    """Pull the EEPROM map and boot-flag values out of the firmware headers."""
-    layout = dict(LAYOUT_DEFAULTS)
-    warnings: list[str] = []
-
-    handler = REPO_ROOT / "include" / "ModuleHandler.h"
-    protocol = REPO_ROOT / "include" / "OTAProtocol.h"
-    version_header = REPO_ROOT / "include" / "FirmwareVersion.h"
-
-    try:
-        text = handler.read_text(encoding="utf-8")
-    except OSError as exc:
-        warnings.append(f"cannot read {handler} ({exc}); using built-in EEPROM map")
-    else:
-        fields = {
-            "init": r"ADDR_INIT\s*=\s*(\w+)",
-            "home_offset": r"ADDR_HOME_OFFSET\s*=\s*(\w+)",
-            "total_steps": r"ADDR_TOTAL_STEPS\s*=\s*(\w+)",
-            "module_id": r"ADDR_MODULE_ID\s*=\s*(\w+)",
-            "auto_home": r"ADDR_AUTO_HOME\s*=\s*(\w+)",
-            "map_chars": r"ADDR_MAP_CHARS\s*=\s*(\w+)",
-            "map_format": r"ADDR_FORMAT\s*=\s*(\w+)",
-            "fw_version": r"ADDR_FW_VERSION\s*=\s*(\w+)",
-            "fw_version_slot": r"FW_VERSION_SLOT\s*=\s*(\w+)",
-            "init_value": r"INIT_VALUE\s*=\s*(\w+)",
-            "format_value": r"FORMAT_VALUE\s*=\s*(\w+)",
-        }
-        for key, pattern in fields.items():
-            value = _numeric(pattern, text)
-            if value is None:
-                warnings.append(f"{handler.name}: {key} not found, using {layout[key]:#04x}")
-            else:
-                layout[key] = value
-
-    try:
-        text = protocol.read_text(encoding="utf-8")
-    except OSError as exc:
-        warnings.append(f"cannot read {protocol} ({exc}); using built-in boot flag")
-    else:
-        for key, pattern in {"flag_addr": r"OTA_EEPROM_BOOT_FLAG_ADDR\s+(\w+)",
-                             "flag_value": r"OTA_BOOT_FLAG_VALUE\s+(\w+)"}.items():
-            value = _numeric(pattern, text)
-            if value is None:
-                warnings.append(f"{protocol.name}: {key} not found, using {layout[key]:#04x}")
-            else:
-                layout[key] = value
-
-    try:
-        text = version_header.read_text(encoding="utf-8")
-    except OSError as exc:
-        warnings.append(
-            f"cannot read {version_header} ({exc}); assuming bus compat {layout['fw_bus_compat']}"
-        )
-    else:
-        value = _numeric(r"FW_BUS_COMPAT\s+(\w+)", text)
-        if value is None:
-            warnings.append(
-                f"{version_header.name}: FW_BUS_COMPAT not found, "
-                f"assuming {layout['fw_bus_compat']}"
-            )
-        else:
-            layout["fw_bus_compat"] = value
-
-    return layout, warnings
+    """Return the layout record; no scraping, no fallbacks, no drift."""
+    return dict(LAYOUT), []
 
 
 # --- Decoding (pure functions, no hardware) -------------------------------------

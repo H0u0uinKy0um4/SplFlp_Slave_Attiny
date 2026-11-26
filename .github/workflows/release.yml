@@ -1,0 +1,87 @@
+name: Release OTA firmware
+
+# Every push to master refreshes one rolling `dev` release. Every pushed
+# v<bus>.<release> tag gets its own immutable release. Both publish exactly the
+# application HEX plus its generated firmware.json; the bootloader is never a
+# normal OTA asset.
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Check generated layout headers are current
+        run: python tools/generate_layout.py --check
+
+      - name: Build the OTA application
+        run: pio run -e ATtiny1616_OTA
+
+      - name: Generate dev manifest
+        if: github.ref_type == 'branch'
+        run: >-
+          python tools/release_manifest.py
+          --image .pio/build/ATtiny1616_OTA/firmware.hex
+          --out firmware.json --channel dev
+          --source-commit "$GITHUB_SHA"
+
+      - name: Generate stable manifest
+        if: github.ref_type == 'tag'
+        run: >-
+          python tools/release_manifest.py
+          --image .pio/build/ATtiny1616_OTA/firmware.hex
+          --out firmware.json --channel stable
+          --tag "$GITHUB_REF_NAME" --source-commit "$GITHUB_SHA"
+
+      - name: Verify manifest against the published image and sources
+        run: >-
+          python test/test_release_manifest.py --verify firmware.json
+          --image .pio/build/ATtiny1616_OTA/firmware.hex
+
+      - name: Publish rolling dev release
+        if: github.ref_type == 'branch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A rolling channel: delete the old release and its tag so exactly
+          # one current firmware.hex/firmware.json pair is ever published.
+          if gh release view dev >/dev/null 2>&1; then
+            gh release delete dev --yes --cleanup-tag
+          fi
+          gh release create dev \
+            .pio/build/ATtiny1616_OTA/firmware.hex firmware.json \
+            --title dev --target "$GITHUB_SHA" \
+            --notes "Rolling dev build from $GITHUB_SHA"
+
+      - name: Publish immutable stable release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; stable releases are immutable."
+            exit 0
+          fi
+          gh release create "$GITHUB_REF_NAME" \
+            .pio/build/ATtiny1616_OTA/firmware.hex firmware.json \
+            --title "$GITHUB_REF_NAME" --verify-tag \
+            --notes "Stable slave application release $GITHUB_REF_NAME"

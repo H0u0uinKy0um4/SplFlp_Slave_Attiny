@@ -57,26 +57,26 @@ import sys
 import zlib
 from pathlib import Path
 
-# --- Flash map (must match bootloader/src/protocol.h) ----------------------
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from layout import (  # noqa: E402  (canonical persisted-layout record)
+    APP_MAX_PAGES, APP_MAX_SIZE, APP_START, BOOT_SECTION_SIZE, FLASH_END,
+    FLASH as LAYOUT_FLASH, FLASH_PAGE_SIZE, LAYOUT, BOOTLOADER_VERSION,
+)
 
-BOOT_SECTION_SIZE = 2048          # BOOTEND = 8 -> 2 KB boot section
-APP_START = 0x0800                # application base address
-FLASH_END = 0x4000                # 16 KB total flash
+# --- Flash map from layout/persisted_layout.json ---------------------------
 
 # Fuse values written by this installer (offsets are prog.py's fuse offsets).
 FUSES = {
     2: 0x02,   # OSCCFG: 20 MHz
     5: 0xC5,   # SYSCFG0: factory 0xC4 | EESAVE (UPDI pin config preserved)
-    8: 0x08,   # BOOTEND: 2 KB boot section
+    8: LAYOUT_FLASH["bootloader_pages"],   # BOOTEND: boot section in 256-byte units
 }
 
-# EEPROM 255 (see bootloader/include/protocol.h OTA_EEPROM_BOOT_FLAG_ADDR).
-# It is cleared after every install: EESAVE=1 preserves EEPROM through the
-# installer's chip erase, so an armed flag from an earlier OTA session would
-# otherwise survive the reinstall and the freshly installed app would never
-# start (the bootloader would stay in update mode).
-EEPROM_BOOT_FLAG_ADDR = 255
-EEPROM_BOOT_FLAG_CLEAR = 0x00
+# The boot flag is cleared after every install: EESAVE=1 preserves EEPROM
+# through the chip erase, so an armed flag from an earlier session would
+# otherwise survive and leave the bootloader in update mode.
+EEPROM_BOOT_FLAG_ADDR = LAYOUT["flag_addr"]
+EEPROM_BOOT_FLAG_CLEAR = LAYOUT["flag_clear_value"]
 
 DEVICE = "attiny1616"
 

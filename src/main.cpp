@@ -7,7 +7,7 @@ SplitFlapModule attiny;
 
 void setup(){
     debugMark(DBG_STAGE_SETUP);
-    setupRS485();
+    setupRS485(attiny);
     debugMark(DBG_STAGE_RS485);
     attiny.waitOnBroadCast();
     debugMark(DBG_STAGE_BROADCAST);

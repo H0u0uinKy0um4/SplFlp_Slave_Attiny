@@ -100,7 +100,7 @@ def load_image(path: Path) -> bytes:
         image = install.image_bytes(records, app_lo, app_hi)
     except install.InstallError as exc:
         raise SystemExit(f"error: {exc}") from exc
-    app_max = install.FLASH_END - install.APP_START
+    app_max = install.APP_MAX_SIZE
     if not 0 < len(image) <= app_max:
         raise SystemExit(f"error: image is {len(image)} bytes, the "
                          f"application region holds {app_max}")
@@ -160,7 +160,7 @@ def main() -> int:
     image = load_image(args.image)
 
     crc = zlib.crc32(image) & 0xFFFFFFFF
-    pages = (len(image) + 63) // 64
+    pages = (len(image) + install.FLASH_PAGE_SIZE - 1) // install.FLASH_PAGE_SIZE
     print(f"Image  : {args.image}")
     print(f"         {len(image)} bytes at 0x{install.APP_START:04X}, "
           f"{pages} pages, crc32 {crc:08X}")

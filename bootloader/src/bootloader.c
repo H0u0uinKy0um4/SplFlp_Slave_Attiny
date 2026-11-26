@@ -59,6 +59,7 @@
 
 #include "protocol.h"
 #include "codec.h"
+#include "frame.h"
 
 /* ------------------------------------------------------------------ */
 /* Pin and timing constants                                            */
@@ -199,90 +200,39 @@ start:
 }
 
 /* ------------------------------------------------------------------ */
-/* Frame receive                                                       */
+/* Frame receive adapter                                               */
 /* ------------------------------------------------------------------ */
 
-typedef struct {
-    uint8_t addr;
-    uint8_t cmd;
-    uint8_t len;
-    uint8_t payload[OTA_MAX_PAYLOAD];
-} ota_frame_t;
-
-/* The one frame buffer.  Static so the handlers use direct lds/sts. */
+/* The one frame buffer. Decoding and session policy live in frame.c. */
 static ota_frame_t fr;
 
-/*
- * rx_logical(): reads one escape-decoded (logical) byte.  Returns -1 on
- * timeout, framing error or an illegal wire sequence (raw 'm', or an
- * unknown escape code).  Mirrors ota_escape_decode() in codec.h, which the
- * host tests and the master use; keep the wire format identical.
- */
-static int rx_logical(void)
+/* The fetch adapter gives the sync byte a longer wait than frame bytes. */
+static uint16_t fetch_wait_ms;
+
+static int uart_fetch(void)
 {
-    int b = uart_rx_byte(BYTE_WAIT_MS);
-    if (b < 0)
-        return -1;
-    if (b != OTA_ESC) {
-        if (b == OTA_FORBIDDEN)
-            return -1;          /* raw 'm' must never appear on the wire */
-        return b;
-    }
-    int c = uart_rx_byte(BYTE_WAIT_MS);
-    if (c == OTA_ESC_ESC)
-        return 0x5C;
-    if (c == OTA_ESC_M)
-        return 0x6D;
-    return -1;
+    int byte = uart_rx_byte(fetch_wait_ms);
+    fetch_wait_ms = BYTE_WAIT_MS;
+    return byte;
 }
 
 /*
- * recv_frame(): reads one OTA frame into fr, addressed to anyone; the
- * caller filters by address.  Returns 1 on a CRC-valid frame, 0 on timeout
- * or noise (the master retries).  first_wait_ms is how long to wait for
- * the leading sync byte; noise bytes are skipped while resynchronising.
- * CRC-16 is computed while receiving.
+ * recv_frame(): consume bytes up to the sync marker, then hand the frame to
+ * the decoder module. Returns 1 on a CRC-valid frame, 0 on timeout/noise.
  */
 static uint8_t recv_frame(uint16_t first_wait_ms)
 {
-    uint16_t wait = first_wait_ms;
+    fetch_wait_ms = first_wait_ms;
     for (;;) {
-        int b = uart_rx_byte(wait);
+        int b = uart_fetch();
         if (b < 0)
             return 0;                           /* idle timeout */
         if (b == OTA_SYNC)
             break;
-        wait = NOISE_WAIT_MS;                   /* noise byte, resync */
+        fetch_wait_ms = NOISE_WAIT_MS;          /* noise byte, resync */
     }
-
-    uint16_t crc = 0xFFFF;
-    uint8_t hdr[3];                             /* addr, cmd, len */
-    for (uint8_t i = 0; i < 3; i++) {
-        int d = rx_logical();
-        if (d < 0)
-            return 0;
-        hdr[i] = (uint8_t)d;
-        crc = ota_crc16_byte(crc, (uint8_t)d);
-    }
-    fr.addr = hdr[0];
-    fr.cmd = hdr[1];
-    fr.len = hdr[2];
-    if (fr.len > OTA_MAX_PAYLOAD)
-        return 0;
-
-    for (uint8_t i = 0; i < fr.len; i++) {
-        int d = rx_logical();
-        if (d < 0)
-            return 0;
-        fr.payload[i] = (uint8_t)d;
-        crc = ota_crc16_byte(crc, (uint8_t)d);
-    }
-
-    int hi = rx_logical();
-    int lo = (hi < 0) ? -1 : rx_logical();
-    if (hi < 0 || lo < 0)
-        return 0;
-    return (uint16_t)((hi << 8) | lo) == crc;
+    fetch_wait_ms = BYTE_WAIT_MS;
+    return ota_frame_receive(uart_fetch, &fr);
 }
 
 /* ------------------------------------------------------------------ */
@@ -290,9 +240,7 @@ static uint8_t recv_frame(uint16_t first_wait_ms)
 /* ------------------------------------------------------------------ */
 
 static uint8_t module_id;
-static uint8_t staying;            /* boot flag set / session active     */
-static uint16_t session_size;      /* app size from START_UPDATE         */
-static uint8_t session_crc[4];     /* image CRC32 from START_UPDATE, big-endian */
+static ota_session_t session;
 
 /* ------------------------------------------------------------------ */
 /* Frame transmit                                                      */
@@ -349,16 +297,6 @@ static void send_response(uint8_t cmd, const uint8_t *payload, uint8_t len)
     uart_tx_escaped((uint8_t)(crc >> 8));
     uart_tx_escaped((uint8_t)crc);
     VPORTA_OUT &= (uint8_t)~DE_MASK;            /* driver off */
-}
-
-static void send_ack(void)
-{
-    send_response(RESP_ACK, 0, 0);
-}
-
-static void send_nack(uint8_t error)
-{
-    send_response(RESP_NACK, &error, 1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -460,121 +398,41 @@ static void reset_now(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Command handling                                                    */
+/* Session port adapters                                               */
 /* ------------------------------------------------------------------ */
 
-static void handle_start(void)
+static void bl_send_response(uint8_t cmd, const uint8_t *payload, uint8_t len)
 {
-    if (fr.len != LEN_START_UPDATE) {
-        send_nack(ERR_LENGTH);
-        return;
-    }
-    uint16_t size = (uint16_t)((fr.payload[0] << 8) | fr.payload[1]);
-    if (size == 0 || size > APP_MAX_SIZE) {
-        send_nack(ERR_ADDRESS);
-        return;
-    }
-
-    session_size = size;
-    session_crc[0] = fr.payload[2];
-    session_crc[1] = fr.payload[3];
-    session_crc[2] = fr.payload[4];
-    session_crc[3] = fr.payload[5];
-    /* Arm the boot flag before the first page is written so a power cut
-       mid-session re-enters the bootloader. */
-    eeprom_write_byte(OTA_EEPROM_BOOT_FLAG_ADDR, OTA_BOOT_FLAG_VALUE);
-    staying = 1;
-    send_ack();
+    send_response(cmd, payload, len);
 }
 
-static void handle_write_page(void)
+static void bl_write_page(uint16_t page, const uint8_t *data)
 {
-    if (fr.len != LEN_WRITE_PAGE) {
-        send_nack(ERR_LENGTH);
-        return;
-    }
-    if (!staying) {
-        /* Pages are only accepted once a session exists (boot flag set or
-           START_UPDATE received in the boot window). */
-        send_nack(ERR_SEQUENCE);
-        return;
-    }
-    uint16_t page = (uint16_t)((fr.payload[0] << 8) | fr.payload[1]);
-    if (page >= APP_MAX_PAGES) {
-        send_nack(ERR_ADDRESS);
-        return;
-    }
-    flash_write_page(page, fr.payload + 2);
-    send_ack();
+    flash_write_page(page, data);
 }
 
-static void handle_finish(void)
+static uint32_t bl_app_crc32(uint16_t size)
 {
-    if (fr.len != LEN_FINISH) {
-        send_nack(ERR_LENGTH);
-        return;
-    }
-    if (!staying || session_size == 0) {
-        send_nack(ERR_SEQUENCE);
-        return;
-    }
-    /* START and FINISH must describe the same image. */
-    if (fr.payload[0] != session_crc[0] || fr.payload[1] != session_crc[1] ||
-        fr.payload[2] != session_crc[2] || fr.payload[3] != session_crc[3]) {
-        send_nack(ERR_SEQUENCE);
-        return;
-    }
+    return app_region_crc32(size);
+}
 
-    uint32_t actual = app_region_crc32(session_size);
-    if ((uint8_t)(actual >> 24) != session_crc[0] ||
-        (uint8_t)(actual >> 16) != session_crc[1] ||
-        (uint8_t)(actual >> 8) != session_crc[2] ||
-        (uint8_t)actual != session_crc[3]) {
-        /* Flag stays set: the module remains in the bootloader and the
-           master can re-flash. */
-        send_nack(ERR_VERIFY);
-        return;
-    }
+static void bl_set_boot_flag(uint8_t value)
+{
+    eeprom_write_byte(OTA_EEPROM_BOOT_FLAG_ADDR, value);
+}
 
-    eeprom_write_byte(OTA_EEPROM_BOOT_FLAG_ADDR, 0x00);
-    send_ack();
+static void bl_reset(void)
+{
     reset_now();
 }
 
-static void handle_reset(void)
-{
-    eeprom_write_byte(OTA_EEPROM_BOOT_FLAG_ADDR, 0x00);
-    send_ack();
-    reset_now();
-}
+static const ota_session_ports_t session_ports = {
+    bl_send_response, bl_write_page, bl_app_crc32, bl_set_boot_flag, bl_reset
+};
 
-static void handle_frame(void)
+static uint8_t handle_frame(void)
 {
-    /* Unicast only; broadcast is reserved and ignored. */
-    if (fr.addr != module_id)
-        return;
-
-    switch (fr.cmd) {
-    case CMD_PING: {
-        uint8_t info[3] = { BOOTLOADER_VERSION, module_id, staying };
-        send_response(RESP_ACK, info, sizeof(info));
-        break;
-    }
-    case CMD_START_UPDATE:
-        handle_start();
-        break;
-    case CMD_WRITE_PAGE:
-        handle_write_page();
-        break;
-    case CMD_FINISH:
-        handle_finish();
-        break;
-    case CMD_RESET:
-        handle_reset();
-        break;
-    default:
-        break;                                  /* unknown command: ignore */
-    }
+    return ota_session_handle(&session, &fr, module_id, &session_ports);
 }
 
 /* ------------------------------------------------------------------ */
@@ -597,19 +455,21 @@ int main(void)
     VPORTA_DIR = TX_MASK | DE_MASK;
 
     module_id = *(volatile uint8_t *)(MAPPED_EEPROM + OTA_EEPROM_MODULE_ID_ADDR);
-    session_size = 0;
-    staying = (*(volatile uint8_t *)(MAPPED_EEPROM + OTA_EEPROM_BOOT_FLAG_ADDR)
-               == OTA_BOOT_FLAG_VALUE)
-              || !app_looks_present();
+    ota_session_init(&session,
+                     (*(volatile uint8_t *)(MAPPED_EEPROM
+                                            + OTA_EEPROM_BOOT_FLAG_ADDR)
+                      == OTA_BOOT_FLAG_VALUE)
+                     || !app_looks_present());
 #ifdef OTA_DEBUG_MARKERS
     {
         uint16_t app_word = *(volatile uint16_t *)(MAPPED_FLASH + APP_START_BYTE);
         eeprom_write_byte(DBG_EE_APP_WORD_LO, (uint8_t)(app_word & 0xFF));
         eeprom_write_byte(DBG_EE_APP_WORD_HI, (uint8_t)(app_word >> 8));
-        eeprom_write_byte(DBG_EE_STAYING, staying ? DBG_BL_STAYING_VALUE : 0x55);
+        eeprom_write_byte(DBG_EE_STAYING, ota_session_staying(&session)
+                                             ? DBG_BL_STAYING_VALUE : 0x55);
     }
 #endif
-    uint16_t window_left_ms = BOOT_WAIT_MS;    /* boot window when !staying */
+    uint16_t window_left_ms = BOOT_WAIT_MS;    /* boot window when not staying */
 
     while (WDT_STATUS & WDT_SYNCBUSY_bm)
         ;
@@ -619,7 +479,7 @@ int main(void)
         wdr_kick();
 
         uint8_t got;
-        if (staying) {
+        if (ota_session_staying(&session)) {
             got = recv_frame(IDLE_WAIT_MS);
         } else {
             if (window_left_ms == 0)
@@ -634,10 +494,9 @@ int main(void)
         if (!got)
             continue;
 
-        handle_frame();
-        /* Any frame addressed to us refreshes the (short) boot window;
-           START_UPDATE itself switches to full update mode. */
-        if (!staying && fr.addr == module_id)
+        /* The session module filters addresses and owns every state change. */
+        uint8_t addressed = handle_frame();
+        if (!ota_session_staying(&session) && addressed)
             window_left_ms = BOOT_WAIT_MS;
     }
 }

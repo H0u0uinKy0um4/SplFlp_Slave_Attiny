@@ -1,7 +1,7 @@
 #include <EEPROM.h>
 #include "ModuleHandler.h"
 #include "OTAProtocol.h"
-#include "FirmwareVersion.h"
+#include "FirmwareIdentity.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -61,24 +61,24 @@ void SplitFlapModule::getDrum(String & message)const
 // that is an application predating version tracking, not a version of "".
 void SplitFlapModule::getFirmwareVersion(String & message)const
 {
-  for (uint8_t i = 0; i < FW_VERSION_SLOT; i++) {
-    char c = (char)EEPROM.read(ADDR_FW_VERSION + i);
-    if (c == '\0' || c == (char)0xFF) break;
-    message += c;
-  }
+  uint8_t slot[FW_VERSION_SLOT];
+  for (uint8_t i = 0; i < FW_VERSION_SLOT; i++)
+    slot[i] = EEPROM.read(ADDR_FW_VERSION + i);
+
+  char text[FW_VERSION_SLOT + 1];
+  if (FirmwareIdentity::decode(slot, sizeof(slot), text, sizeof(text)))
+    message += text;
 }
 
 // Called once per boot.  EEPROM.update() skips identical bytes, so a normal
 // boot performs no writes; the slot is rewritten only after an OTA that
-// changed FW_VERSION.  The rest of the slot is zero-padded so a shorter
-// version cannot leave characters from the previous one behind.
+// changed the identity.  FirmwareIdentity owns the composition and padding.
 void SplitFlapModule::saveFirmwareVersion()
 {
-  const size_t length = strlen(FW_VERSION);
-  for (uint8_t i = 0; i < FW_VERSION_SLOT; i++) {
-    char c = i < length ? FW_VERSION[i] : '\0';
-    EEPROM.update(ADDR_FW_VERSION + i, (uint8_t)c);
-  }
+  uint8_t slot[FW_VERSION_SLOT];
+  FirmwareIdentity::encode(FirmwareIdentity::build(), slot, sizeof(slot));
+  for (uint8_t i = 0; i < FW_VERSION_SLOT; i++)
+    EEPROM.update(ADDR_FW_VERSION + i, slot[i]);
 }
 
 void SplitFlapModule::loadFlapChars()
@@ -124,7 +124,7 @@ void SplitFlapModule::setModuleId(int moduleId)
 
 //MAP
 
-uint16_t SplitFlapModule::getMapPosition(uint8_t index)
+uint16_t SplitFlapModule::getMapPosition(uint8_t index) const
 {
     if (index >= DRUM_SIZE) return 0xFFFF;
     uint16_t position;

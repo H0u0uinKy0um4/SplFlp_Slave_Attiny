@@ -17,19 +17,21 @@
 // release 4.2. The compile-time construction makes it impossible for the two
 // to drift.
 
+#include "PersistedLayout.h"
+
 #define SF_STRINGIFY_(value) #value
 #define SF_STRINGIFY(value) SF_STRINGIFY_(value)
 
 // Bump this only for a breaking slave <-> master change. Keep it in lockstep
 // with MASTER_BUS_COMPAT (master include/Version.h). The MQTT generation is
 // independent and lives in the master and Home Assistant.
-#define FW_BUS_COMPAT 1
+#define FW_BUS_COMPAT SF_FW_BUS_COMPAT
 
 // Bump this for every image you upload. The version is how a module proves
 // which application actually runs after an OTA.
-#define FW_RELEASE "0.1"
+#define FW_RELEASE "0.2"
 
-// Full application version, e.g. "1.0.1". Keep it at most 7 characters:
+// Full application version, e.g. "1.0.2". Keep it at most 7 characters:
 // at most one compat digit and a short release, because the EEPROM slot is
 // 8 bytes including the terminating NUL and the value travels inside a
 // colon-separated RS485 line (no spaces, colons or newlines).

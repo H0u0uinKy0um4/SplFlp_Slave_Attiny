@@ -2,8 +2,9 @@
  * @file OTAProtocol.h
  * @brief Shared protocol definitions for RS485 OTA firmware update.
  *
- * Application-side mirror of bootloader/src/protocol.h.  The two files must
- * stay in sync: change both or neither.  The application itself only uses
+ * Application-side mirror of bootloader/src/protocol.h.  Both read the
+ * canonical layout record through their generated headers; change the record
+ * and regenerate, never hand-edit a mirror.  The application itself only uses
  * the EEPROM boot flag (the 'b' command); everything else documents the
  * contract implemented by the bootloader and the master's flasher.
  *
@@ -30,6 +31,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "PersistedLayout.h"
 
 /* -- Packet framing ----------------------------------------------------- */
 #define OTA_SYNC            0xAA    /* Start-of-frame marker           */
@@ -62,23 +64,23 @@
 #define LEN_RESET           0
 
 /* -- EEPROM addresses shared between app and bootloader -------------------- */
-#define OTA_EEPROM_BOOT_FLAG_ADDR   255     /* Last EEPROM byte        */
-#define OTA_EEPROM_MODULE_ID_ADDR   5       /* Same as ADDR_MODULE_ID */
-#define OTA_BOOT_FLAG_VALUE          0xB0    /* Magic value = enter bootloader */
+#define OTA_EEPROM_BOOT_FLAG_ADDR   SF_EEPROM_BOOT_FLAG_ADDR
+#define OTA_EEPROM_MODULE_ID_ADDR   SF_EEPROM_MODULE_ID_ADDR
+#define OTA_BOOT_FLAG_VALUE         SF_BOOT_FLAG_VALUE
 
 /* -- Flash layout ------------------------------------------------------------ */
-#define BOOTLOADER_PAGES    8       /* BOOTEND fuse value (x256 bytes) */
-#define BOOTLOADER_SIZE     (BOOTLOADER_PAGES * 256)   /* 2048 bytes  */
-#define APP_START_BYTE      0x0800  /* Application starts here          */
+#define BOOTLOADER_PAGES    SF_BOOTLOADER_PAGES
+#define BOOTLOADER_SIZE     SF_BOOTLOADER_SIZE
+#define APP_START_BYTE      SF_APP_START_BYTE
 /* GNU as takes jmp operands as byte addresses (it encodes the word address
    itself), so the hand-over must use APP_START_BYTE, not APP_START_BYTE/2. */
-#define FLASH_PAGE_SIZE      64      /* ATtiny1616 page size             */
-#define FLASH_TOTAL_SIZE      16384   /* 16 KB                            */
-#define APP_MAX_SIZE          (FLASH_TOTAL_SIZE - BOOTLOADER_SIZE) /* 14336 */
-#define APP_MAX_PAGES         (APP_MAX_SIZE / FLASH_PAGE_SIZE)     /* 224  */
+#define FLASH_PAGE_SIZE     SF_FLASH_PAGE_SIZE
+#define FLASH_TOTAL_SIZE    SF_FLASH_TOTAL_SIZE
+#define APP_MAX_SIZE        SF_APP_MAX_SIZE
+#define APP_MAX_PAGES       SF_APP_MAX_PAGES
 
 /* -- Protocol constants ------------------------------------------------------- */
-#define BOOTLOADER_VERSION  0x01
+#define BOOTLOADER_VERSION  SF_BOOTLOADER_VERSION
 #define OTA_BAUD_RATE       9600    /* Bit-bang UART speed in bootloader */
 #define BOOT_WAIT_MS        500     /* How long bootloader waits for traffic */
 #define OTA_MAX_RETRIES     3       /* Master retries per page          */

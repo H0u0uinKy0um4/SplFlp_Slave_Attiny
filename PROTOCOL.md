@@ -93,6 +93,11 @@ The movement commands return immediately; use `s` to observe progress.
 | `m<id>a<0\|1>` | Auto-home at boot. |
 | `m<id>b` | Arm the OTA boot flag (EEPROM 255) and reset into the bootloader. Replies `m<id>b:1` first, resets ~100 ms later. Unicast only — a broadcast arms nothing and gets no reply. See [OTA bootloader](#ota-bootloader). |
 
+A wildcard is a distinct value, not the number 64. `*` is valid only as the id
+field (broadcast) and as the index of `e` (clear the map). It is rejected for
+the scalar commands `o`, `t`, `g`, `i` and `a`: those commands ignore the line
+and write nothing. Invalid commands are silent; there is no error reply.
+
 `d` keeps its existing wire format so an older master can still parse it:
 
 ```
@@ -122,9 +127,9 @@ has its own generation and never appears on this bus.
 The version lives in `include/FirmwareVersion.h`:
 
 ```c
-#define FW_BUS_COMPAT 1      // shared with the master (slave <-> master side)
-#define FW_RELEASE "0.1"     // per-repo release inside that generation
-#define FW_VERSION "1.0.1"   // built from the two above
+#define FW_BUS_COMPAT SF_FW_BUS_COMPAT  // from layout/persisted_layout.json
+#define FW_RELEASE "0.2"                // per-repo release inside that generation
+#define FW_VERSION "1.0.2"              // built from the two above
 ```
 
 `FW_BUS_COMPAT` is the **big compatibility number for the bus side**. It changes
